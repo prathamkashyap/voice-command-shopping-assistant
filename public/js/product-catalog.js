@@ -93,19 +93,21 @@ export class ProductCatalog {
   }
 
   getSeasonal(month = new Date().getMonth() + 1) {
+    // Kept to products that actually exist in the catalog, so this always
+    // has something real to suggest instead of silently returning nothing.
     const seasonalMap = {
-      1: ['Oranges', 'Apples', 'Carrots'],
-      2: ['Oranges', 'Strawberries', 'Spinach'],
-      3: ['Strawberries', 'Asparagus', 'Peas'],
-      4: ['Strawberries', 'Asparagus', 'Mangoes'],
-      5: ['Mangoes', 'Watermelon', 'Tomatoes'],
-      6: ['Mangoes', 'Watermelon', 'Corn'],
-      7: ['Watermelon', 'Corn', 'Tomatoes'],
-      8: ['Corn', 'Tomatoes', 'Peaches'],
-      9: ['Apples', 'Pears', 'Grapes'],
-      10: ['Apples', 'Pears', 'Pomegranates'],
-      11: ['Oranges', 'Apples', 'Cranberries'],
-      12: ['Oranges', 'Apples', 'Carrots']
+      1: ['Oranges', 'Apples'],
+      2: ['Oranges', 'Apples'],
+      3: ['Apples', 'Tomatoes'],
+      4: ['Tomatoes', 'Bananas'],
+      5: ['Watermelon', 'Tomatoes'],
+      6: ['Watermelon', 'Bananas'],
+      7: ['Watermelon', 'Tomatoes'],
+      8: ['Tomatoes', 'Watermelon'],
+      9: ['Apples', 'Oranges'],
+      10: ['Apples', 'Oranges'],
+      11: ['Oranges', 'Apples'],
+      12: ['Oranges', 'Apples']
     };
 
     const seasonalNames = seasonalMap[month] || [];
