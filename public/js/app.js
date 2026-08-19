@@ -97,6 +97,7 @@ class App {
     };
     
     this.shoppingList.add(item);
+    this.recommendationEngine.recordPurchase([item]);
     this.ui.showToast(`Added ${item.quantity} ${item.unit} of ${item.name}`, 'success');
     this.updateSuggestions();
   }

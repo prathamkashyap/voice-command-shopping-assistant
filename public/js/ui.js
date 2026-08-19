@@ -108,14 +108,16 @@ export class UI {
       `;
 
       div.querySelector('button').addEventListener('click', () => {
-        this.app.shoppingList.add({
+        const newItem = {
           id: Date.now(),
           name: suggestion.product.name,
           category: suggestion.product.category,
           quantity: 1,
           unit: suggestion.product.size,
           productId: suggestion.product.id
-        });
+        };
+        this.app.shoppingList.add(newItem);
+        this.app.recommendationEngine.recordPurchase([newItem]);
         this.renderShoppingList();
         this.renderSuggestions();
         this.showToast(`Added ${suggestion.product.name}`, 'success');
@@ -151,14 +153,16 @@ export class UI {
       `;
 
       div.querySelector('button').addEventListener('click', () => {
-        this.app.shoppingList.add({
+        const newItem = {
           id: Date.now(),
           name: product.name,
           category: product.category,
           quantity: 1,
           unit: product.size,
           productId: product.id
-        });
+        };
+        this.app.shoppingList.add(newItem);
+        this.app.recommendationEngine.recordPurchase([newItem]);
         this.renderShoppingList();
         this.app.updateSuggestions();
         this.hideSearchResults();
