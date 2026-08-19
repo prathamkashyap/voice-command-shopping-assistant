@@ -1,0 +1,16 @@
+{
+  "name": "voice-command-shopping-assistant",
+  "version": "1.0.0",
+  "description": "Voice-based shopping list manager with smart suggestions",
+  "scripts": {
+    "dev": "npx serve public -l 3000",
+    "build": "echo 'No build step required'",
+    "deploy": "firebase deploy",
+    "test": "echo 'Run manual tests per assignment examples'"
+  },
+  "keywords": ["voice", "shopping", "assistant", "speech-recognition"],
+  "license": "MIT",
+  "devDependencies": {
+    "serve": "^14.2.0"
+  }
+}

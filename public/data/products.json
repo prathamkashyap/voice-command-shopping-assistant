@@ -1,0 +1,17 @@
+[
+  {"id":1,"name":"Milk","category":"Dairy","brand":"Amul","size":"1L","price":60,"keywords":["milk","dairy"],"substitutes":["Almond Milk","Soy Milk","Oat Milk"]},
+  {"id":2,"name":"Almond Milk","category":"Dairy","brand":"Silk","size":"1L","price":120,"keywords":["almond milk","plant milk"],"substitutes":["Milk","Soy Milk","Oat Milk"]},
+  {"id":3,"name":"Apples","category":"Produce","brand":"Local","size":"1kg","price":180,"keywords":["apples","fruit"],"substitutes":["Pears","Bananas"]},
+  {"id":4,"name":"Organic Apples","category":"Produce","brand":"Organic India","size":"1kg","price":280,"keywords":["organic apples","organic fruit"],"substitutes":["Apples","Organic Pears"]},
+  {"id":5,"name":"Bread","category":"Bakery","brand":"Britannia","size":"400g","price":40,"keywords":["bread","loaf"],"substitutes":["Multigrain Bread","Brown Bread"]},
+  {"id":6,"name":"Eggs","category":"Dairy","brand":"Local","size":"12 pcs","price":90,"keywords":["eggs"],"substitutes":[]},
+  {"id":7,"name":"Water","category":"Beverages","brand":"Bisleri","size":"1L","price":20,"keywords":["water","bottled water"],"substitutes":["Sparkling Water","Coconut Water"]},
+  {"id":8,"name":"Sparkling Water","category":"Beverages","brand":"Perrier","size":"330ml","price":80,"keywords":["sparkling water","soda water"],"substitutes":["Water","Soda"]},
+  {"id":9,"name":"Toothpaste","category":"Personal Care","brand":"Colgate","size":"100g","price":95,"keywords":["toothpaste"],"substitutes":["Sensodyne","Pepsodent"]},
+  {"id":10,"name":"Sensodyne","category":"Personal Care","brand":"GSK","size":"100g","price":180,"keywords":["sensodyne","sensitive toothpaste"],"substitutes":["Toothpaste","Pepsodent"]},
+  {"id":11,"name":"Rice","category":"Pantry","brand":"India Gate","size":"5kg","price":450,"keywords":["rice","basmati"],"substitutes":["Brown Rice","Quinoa"]},
+  {"id":12,"name":"Chicken Breast","category":"Meat","brand":"Fresh","size":"500g","price":220,"keywords":["chicken","chicken breast"],"substitutes":["Fish","Tofu","Paneer"]},
+  {"id":13,"name":"Bananas","category":"Produce","brand":"Local","size":"1 dozen","price":60,"keywords":["bananas"],"substitutes":["Apples","Mangoes"]},
+  {"id":14,"name":"Tomatoes","category":"Produce","brand":"Local","size":"1kg","price":40,"keywords":["tomatoes"],"substitutes":["Cherry Tomatoes","Canned Tomatoes"]},
+  {"id":15,"name":"Cheese","category":"Dairy","brand":"Amul","size":"200g","price":120,"keywords":["cheese"],"substitutes":["Paneer","Tofu"]}
+]
