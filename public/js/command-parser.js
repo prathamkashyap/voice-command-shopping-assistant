@@ -8,22 +8,30 @@ const UNITS = ['bottle', 'bottles', 'pack', 'packs', 'box', 'boxes', 'kg', 'kgs'
   'g', 'gram', 'grams', 'l', 'liter', 'liters', 'litre', 'litres', 'ml', 'milliliter', 'milliliters',
   'pcs', 'piece', 'pieces', 'dozen', 'unit', 'units', 'can', 'cans', 'jar', 'jars', 'bag', 'bags'];
 
+// Longest units first so e.g. "kilograms" matches before "kg" would short-circuit it
+const UNIT_ALTERNATION = [...UNITS].sort((a, b) => b.length - a.length).join('|');
+
 const ACTION_PATTERNS = {
+  // Longer, more specific phrases are listed first so they get stripped whole,
+  // before the single-word fallback below has a chance to eat part of them
+  // and leave stray connector words ("to", "buy") behind in the item text.
   add: [
-    /\b(add|buy|get|put|need|want|grab|pick up)\b/i,
-    /\b(i need|i want|i want to buy|i would like)\b/i
+    /\b(i need|i want to buy|i want|i would like)\b/i,
+    /\b(add|buy|get|put|need|want|grab|pick up)\b/i
   ],
   remove: [
-    /\b(remove|delete|take off|take out|drop)\b/i,
-    /\b(remove from|take off from)\b/i
+    /\b(remove from|take off from)\b/i,
+    /\b(remove|delete|take out|drop)\b/i,
+    /\btake\b/i,
+    /\boff\b/i
   ],
   modify: [
-    /\b(change|update|modify|set)\b/i,
-    /\b(change quantity|update quantity)\b/i
+    /\b(change quantity|update quantity)\b/i,
+    /\b(change|update|modify|set)\b/i
   ],
   search: [
-    /\b(find|search|look for|show me)\b/i,
-    /\b(find me|show me)\b/i
+    /\b(find me|show me)\b/i,
+    /\b(find|search|look for|show me)\b/i
   ]
 };
 
@@ -85,9 +93,16 @@ export class CommandParser {
       text = text.replace(pattern, '').trim();
     }
 
-    text = text.replace(/\b(from my list|to my list|on my list|in my list)\b/gi, '').trim();
+    text = text.replace(/\b(from my list|to my list|on my list|in my list|off my list)\b/gi, '').trim();
+    text = text.replace(/\bmy list\b/gi, '').replace(/\s+/g, ' ').trim();
     text = text.replace(/^(i|we)\s+/i, '').trim();
     text = text.replace(/^(please|kindly)\s+/i, '').trim();
+
+    // Clean up connector words left behind by the phrase stripping above,
+    // e.g. "of water" -> "water", "milk quantity to" -> "milk"
+    text = text.replace(/\b(quantity to|quantity)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    text = text.replace(/^(to|of)\s+/i, '').trim();
+    text = text.replace(/\s+(to|of)$/i, '').trim();
     
     parsed.item = text || null;
     
@@ -128,29 +143,34 @@ export class CommandParser {
   }
 
   extractQuantity(text) {
-    const numberMatch = text.match(/(\d+(?:\.\d+)?)\s*(\w+)?/);
-    if (numberMatch) {
-      const quantity = parseFloat(numberMatch[1]);
-      const potentialUnit = numberMatch[2]?.toLowerCase();
-      const unit = UNITS.includes(potentialUnit) ? potentialUnit : null;
-      return {
-        quantity,
-        unit,
-        fullMatch: numberMatch[0]
-      };
+    // Digit-based quantity with a recognized unit right after it, e.g. "2 bottles"
+    let match = text.match(new RegExp(`\\b(\\d+(?:\\.\\d+)?)\\s+(${UNIT_ALTERNATION})\\b`, 'i'));
+    if (match) {
+      return { quantity: parseFloat(match[1]), unit: match[2].toLowerCase(), fullMatch: match[0] };
     }
 
+    // Digit-based quantity with no unit, e.g. "5 oranges" — only consume the
+    // number itself so the following word stays intact as the item name.
+    match = text.match(/\b(\d+(?:\.\d+)?)\b/);
+    if (match) {
+      return { quantity: parseFloat(match[1]), unit: null, fullMatch: match[0] };
+    }
+
+    // Word-based quantity with a recognized unit, e.g. "a dozen" -> handled via UNITS,
+    // "a couple bottles"
     for (const [word, value] of Object.entries(QUANTITY_WORDS)) {
-      const regex = new RegExp(`\\b${word}\\s+(\\w+)?`, 'i');
-      const match = text.match(regex);
-      if (match) {
-        const potentialUnit = match[1]?.toLowerCase();
-        const unit = UNITS.includes(potentialUnit) ? potentialUnit : null;
-        return {
-          quantity: value,
-          unit,
-          fullMatch: match[0]
-        };
+      const withUnit = text.match(new RegExp(`\\b${word}\\s+(${UNIT_ALTERNATION})\\b`, 'i'));
+      if (withUnit) {
+        return { quantity: value, unit: withUnit[1].toLowerCase(), fullMatch: withUnit[0] };
+      }
+    }
+
+    // Word-based quantity with no unit, e.g. "a apple", "two bananas" —
+    // consume only the quantity word, leave the item name alone.
+    for (const [word, value] of Object.entries(QUANTITY_WORDS)) {
+      const bare = text.match(new RegExp(`\\b${word}\\b`, 'i'));
+      if (bare) {
+        return { quantity: value, unit: null, fullMatch: bare[0] };
       }
     }
 
