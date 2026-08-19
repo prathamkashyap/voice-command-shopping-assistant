@@ -59,7 +59,7 @@ export class VoiceRecognition {
         .map(r => r[0].transcript)
         .join('');
       
-      this.ui.updateRecognizedText(transcript, event.results[0].isFinal);
+      this.ui.showRecognizedText(transcript, event.results[0].isFinal);
       
       if (event.results[0].isFinal) {
         this.ui.app.processCommand(transcript);
