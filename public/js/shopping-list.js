@@ -41,15 +41,8 @@ export class ShoppingList {
   }
 
   remove(id) {
-    const index = this.items.findIndex(i => i.id === id);
-    if (index !== -1) {
-      const item = this.items[index];
-      this.items[index] = { ...item, _removing: true };
-      setTimeout(() => {
-        this.items = this.items.filter(i => i.id !== id);
-        this.save();
-      }, 200);
-    }
+    this.items = this.items.filter(i => i.id !== id);
+    this.save();
   }
 
   update(item) {
