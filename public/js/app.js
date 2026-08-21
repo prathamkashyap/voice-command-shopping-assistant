@@ -143,7 +143,8 @@ class App {
       query: parsed.item,
       brand: parsed.brand,
       maxPrice: parsed.maxPrice,
-      category: parsed.category
+      category: parsed.category,
+      isOrganic: parsed.isOrganic
     });
     
     this.ui.showSearchResults(results, parsed);
@@ -159,6 +160,7 @@ class App {
     
     if (confirm('Clear entire shopping list?')) {
       this.shoppingList.clear();
+      this.ui.renderShoppingList();
       this.ui.showToast('Shopping list cleared', 'info');
       this.updateSuggestions();
     }
