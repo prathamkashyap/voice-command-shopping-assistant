@@ -83,6 +83,10 @@ class App {
       default:
         throw new Error(`Unknown command: ${parsed.action}`);
     }
+
+    if (parsed.action === 'add' || parsed.action === 'remove' || parsed.action === 'modify') {
+      this.ui.renderShoppingList();
+    }
   }
 
   async addItem(parsed) {
@@ -128,6 +132,7 @@ class App {
     
     this.shoppingList.update(item);
     this.ui.showToast(`Updated ${item.name} to ${item.quantity} ${item.unit}`, 'success');
+    this.updateSuggestions();
   }
 
   async searchProducts(parsed) {

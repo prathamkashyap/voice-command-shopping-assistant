@@ -54,9 +54,25 @@ export class ShoppingList {
   }
 
   findByName(name) {
-    return this.items.find(i => 
-      i.name.toLowerCase().includes(name.toLowerCase()) ||
-      name.toLowerCase().includes(i.name.toLowerCase())
+    const query = name.toLowerCase();
+
+    // Prefer an exact match ("milk" -> "Milk") over a fuzzy one so that
+    // removing/updating "milk" can't accidentally hit "Almond Milk" just
+    // because it happens to sit earlier in the list. Only fall back to
+    // substring matching when nothing matches exactly, and among those
+    // fuzzy matches prefer the shortest name (the closest match to what
+    // was actually said).
+    const exact = this.items.find(i => i.name.toLowerCase() === query);
+    if (exact) return exact;
+
+    const fuzzyMatches = this.items.filter(i =>
+      i.name.toLowerCase().includes(query) || query.includes(i.name.toLowerCase())
+    );
+
+    if (fuzzyMatches.length === 0) return undefined;
+
+    return fuzzyMatches.reduce((closest, candidate) =>
+      candidate.name.length < closest.name.length ? candidate : closest
     );
   }
 

@@ -29,6 +29,7 @@ export class RecommendationEngine {
       this.history.push({
         name: item.name,
         category: item.category,
+        productId: item.productId,
         timestamp: Date.now()
       });
     }
@@ -91,7 +92,7 @@ export class RecommendationEngine {
 
     for (const h of recent) {
       const key = h.name.toLowerCase();
-      if (!counts[key]) counts[key] = { count: 0, name: h.name, category: h.category };
+      if (!counts[key]) counts[key] = { count: 0, name: h.name, category: h.category, productId: h.productId };
       counts[key].count++;
     }
 
