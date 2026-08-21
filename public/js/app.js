@@ -57,11 +57,14 @@ class App {
 
   async processCommand(text) {
     this.ui.showRecognizedText(text);
-    
+    this.ui.setStatus('processing');
+
     try {
       const parsed = this.commandParser.parse(text);
       await this.executeCommand(parsed);
+      this.ui.setStatus('success');
     } catch (error) {
+      this.ui.setStatus('error');
       this.ui.showToast(error.message, 'error');
     }
   }

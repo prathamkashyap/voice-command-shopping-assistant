@@ -3,6 +3,7 @@ export class UI {
     this.app = app;
     this.shoppingListEl = document.getElementById('shoppingList');
     this.emptyStateEl = document.getElementById('emptyState');
+    this.listCountEl = document.getElementById('listCount');
     this.suggestionsSectionEl = document.getElementById('suggestionsSection');
     this.suggestionsListEl = document.getElementById('suggestionsList');
     this.searchResultsSectionEl = document.getElementById('searchResultsSection');
@@ -11,6 +12,7 @@ export class UI {
     this.micButton = document.getElementById('micButton');
     this.micStatus = document.getElementById('micStatus');
     this.toastContainer = document.getElementById('toastContainer');
+    this._statusResetTimer = null;
   }
 
   render() {
@@ -20,9 +22,10 @@ export class UI {
 
   renderShoppingList() {
     const items = this.app.shoppingList.getAll();
-    
+    this.listCountEl.textContent = items.length;
+
     if (items.length === 0) {
-      this.emptyStateEl.style.display = 'block';
+      this.emptyStateEl.style.display = 'flex';
       this.shoppingListEl.innerHTML = '';
       this.shoppingListEl.appendChild(this.emptyStateEl);
       return;
@@ -36,7 +39,6 @@ export class UI {
     for (const [category, categoryItems] of Object.entries(grouped)) {
       const categoryHeader = document.createElement('div');
       categoryHeader.className = 'category-header';
-      categoryHeader.style.cssText = 'font-weight: 600; color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 8px;';
       categoryHeader.textContent = category;
       this.shoppingListEl.appendChild(categoryHeader);
 
@@ -54,16 +56,15 @@ export class UI {
 
     div.innerHTML = `
       <div class="item-info">
-        <div class="item-name">${this.escapeHtml(item.name)}</div>
+        <span class="item-name">${this.escapeHtml(item.name)}</span>
         <div class="item-meta">
           <span class="item-category">${this.escapeHtml(item.category)}</span>
-          <span class="item-quantity">Qty: ${item.quantity}</span>
-          <span class="item-unit">${this.escapeHtml(item.unit)}</span>
         </div>
       </div>
+      <span class="item-qty">${item.quantity}<span class="item-unit">${this.escapeHtml(item.unit)}</span></span>
       <div class="item-actions">
         <button class="icon-btn delete" aria-label="Remove ${this.escapeHtml(item.name)}" title="Remove">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
         </button>
@@ -91,7 +92,7 @@ export class UI {
 
     for (const suggestion of suggestions) {
       const div = document.createElement('div');
-      div.className = 'suggestion-item';
+      div.className = `suggestion-item suggestion-item--${suggestion.type}`;
       
       const typeLabels = {
         history: 'Based on history',
@@ -102,9 +103,15 @@ export class UI {
       div.innerHTML = `
         <div class="suggestion-info">
           <div class="suggestion-name">${this.escapeHtml(suggestion.product.name)}</div>
-          <div class="suggestion-reason">${typeLabels[suggestion.type]} • ${this.escapeHtml(suggestion.reason)} • $${suggestion.product.price}</div>
+          <div class="suggestion-meta">
+            <span class="suggestion-badge">${typeLabels[suggestion.type]}</span>
+            <span class="suggestion-reason">${this.escapeHtml(suggestion.reason)}</span>
+          </div>
         </div>
-        <button class="btn btn-primary" style="padding: 6px 12px; font-size: 0.75rem;">Add</button>
+        <div class="suggestion-side">
+          <span class="suggestion-price">$${suggestion.product.price}</span>
+          <button class="btn btn-primary btn-sm">Add</button>
+        </div>
       `;
 
       div.querySelector('button').addEventListener('click', () => {
@@ -132,24 +139,29 @@ export class UI {
     this.searchResultsEl.innerHTML = '';
 
     if (results.length === 0) {
-      this.searchResultsEl.innerHTML = '<p style="text-align: center; color: var(--text-muted); padding: 24px;">No products found</p>';
+      this.searchResultsEl.innerHTML = '<p class="no-results">No products found for your search.</p>';
       return;
     }
 
     for (const product of results) {
       const div = document.createElement('div');
-      div.className = 'search-result-item';
+      div.className = 'product-card';
       
       div.innerHTML = `
-        <div class="search-result-info">
-          <div class="search-result-name">${this.escapeHtml(product.name)}</div>
-          <div class="search-result-meta">
+        <div class="product-info">
+          <div class="product-name">${this.escapeHtml(product.name)}</div>
+          <div class="product-meta">
             <span>${this.escapeHtml(product.brand)}</span>
+            <span class="product-meta-dot" aria-hidden="true"></span>
             <span>${this.escapeHtml(product.size)}</span>
-            <span class="search-result-price">$${product.price}</span>
+            <span class="product-meta-dot" aria-hidden="true"></span>
+            <span>${this.escapeHtml(product.category)}</span>
           </div>
         </div>
-        <button class="btn btn-primary" style="padding: 6px 12px; font-size: 0.75rem;">Add</button>
+        <div class="suggestion-side">
+          <span class="product-price">$${product.price}</span>
+          <button class="btn btn-primary btn-sm">Add</button>
+        </div>
       `;
 
       div.querySelector('button').addEventListener('click', () => {
@@ -180,13 +192,38 @@ export class UI {
   }
 
   showRecognizedText(text, isFinal = true) {
-    this.recognizedTextEl.textContent = isFinal ? `Heard: "${text}"` : `Listening: "${text}"`;
-    this.recognizedTextEl.style.color = isFinal ? 'var(--text)' : 'var(--primary)';
+    this.recognizedTextEl.innerHTML = `<span class="rt-label">${isFinal ? 'You said' : 'Listening'}</span>${this.escapeHtml(text)}`;
+    this.recognizedTextEl.classList.toggle('is-final', isFinal);
+    const textCommandEl = document.getElementById('textCommand');
+    if (textCommandEl) {
+      textCommandEl.value = text;
+    }
   }
 
   setListeningState(listening) {
-    this.micButton.classList.toggle('listening', listening);
-    this.micStatus.textContent = listening ? 'Listening...' : 'Tap to speak';
+    this.micButton.setAttribute('aria-label', listening ? 'Stop voice input' : 'Start voice input');
+    this.setStatus(listening ? 'listening' : 'idle');
+  }
+
+  setStatus(status, label) {
+    const labels = {
+      idle: 'Tap to speak',
+      listening: 'Listening…',
+      processing: 'Processing…',
+      success: label || 'Got it',
+      error: label || "Didn't catch that"
+    };
+
+    this.micButton.dataset.status = status;
+    this.micStatus.dataset.status = status;
+    this.micStatus.querySelector('.status-label').textContent = labels[status] || labels.idle;
+
+    clearTimeout(this._statusResetTimer);
+    if (status === 'success' || status === 'error') {
+      this._statusResetTimer = setTimeout(() => {
+        this.setStatus(this.app.voiceRecognition?.isListening ? 'listening' : 'idle');
+      }, 1800);
+    }
   }
 
   showToast(message, type = 'info') {

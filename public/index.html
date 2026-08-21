@@ -3,77 +3,116 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Voice Command Shopping Assistant</title>
+  <title>Shopping Assistant</title>
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-  <div class="app-container">
+  <div class="app">
     <header class="app-header">
-      <h1>Shopping Assistant</h1>
-      <div class="language-selector">
-        <label for="language">Language:</label>
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+          </svg>
+        </span>
+        <h1>Shopping Assistant</h1>
+      </div>
+      <div class="language-select">
+        <label for="language" class="sr-only">Language</label>
         <select id="language">
-          <option value="en-US">English (US)</option>
-          <option value="hi-IN">Hindi (India)</option>
-          <option value="te-IN">Telugu (India)</option>
-          <option value="ta-IN">Tamil (India)</option>
+          <option value="en-US">English</option>
+          <option value="hi-IN">Hindi</option>
+          <option value="te-IN">Telugu</option>
+          <option value="ta-IN">Tamil</option>
         </select>
       </div>
     </header>
 
     <main class="app-main">
-      <section class="voice-input-section">
-        <div class="mic-button-container">
-          <button id="micButton" class="mic-button" aria-label="Start voice input">
-            <svg class="mic-icon" viewBox="0 0 24 24" width="32" height="32" fill="currentColor">
+      <section class="voice-section" aria-label="Voice input">
+        <div class="mic-wrap">
+          <button id="micButton" class="mic-btn" data-status="idle" aria-label="Start voice input">
+            <span class="mic-ring" aria-hidden="true"></span>
+
+            <svg class="mic-glyph mic-glyph--idle" viewBox="0 0 24 24" width="30" height="30" fill="currentColor" aria-hidden="true">
               <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
             </svg>
-            <svg class="mic-icon listening" viewBox="0 0 24 24" width="32" height="32" fill="currentColor">
-              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
-              <animate attributeName="opacity" values="1;0.3;1" dur="1s" repeatCount="indefinite"/>
+
+            <span class="mic-glyph mic-glyph--waveform" aria-hidden="true">
+              <span class="wave-bar"></span>
+              <span class="wave-bar"></span>
+              <span class="wave-bar"></span>
+              <span class="wave-bar"></span>
+              <span class="wave-bar"></span>
+            </span>
+
+            <span class="mic-glyph mic-glyph--processing" aria-hidden="true">
+              <span class="spinner"></span>
+            </span>
+
+            <svg class="mic-glyph mic-glyph--success" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+
+            <svg class="mic-glyph mic-glyph--error" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
-          <p class="mic-status" id="micStatus">Tap to speak</p>
         </div>
 
-        <div class="text-input-fallback">
-          <label for="textCommand">Or type a command:</label>
-          <div class="text-input-wrapper">
-            <input type="text" id="textCommand" placeholder="e.g., Add 2 bottles of water" aria-label="Type command">
+        <p class="mic-status" id="micStatus">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="status-label">Tap to speak</span>
+        </p>
+
+        <div class="recognized-text" id="recognizedText" aria-live="polite"></div>
+
+        <div class="text-fallback">
+          <label for="textCommand">Type a command instead</label>
+          <div class="text-fallback-row">
+            <input type="text" id="textCommand" placeholder="e.g. Add 2 bottles of water" aria-label="Type command">
             <button id="sendCommand" class="btn btn-primary">Send</button>
           </div>
         </div>
-
-        <div class="recognized-text" id="recognizedText" aria-live="polite"></div>
       </section>
 
-      <section class="shopping-list-section">
+      <section class="list-section" aria-label="Shopping list">
         <div class="section-header">
-          <h2>Shopping List</h2>
-          <button id="clearList" class="btn btn-secondary" aria-label="Clear list">Clear List</button>
+          <h2>Shopping List <span class="count-badge" id="listCount">0</span></h2>
+          <button id="clearList" class="btn btn-ghost btn-sm" aria-label="Clear list">Clear all</button>
         </div>
 
         <div class="shopping-list" id="shoppingList" role="list">
-          <p class="empty-state" id="emptyState">Your list is empty. Add items by voice or text.</p>
+          <div class="empty-state" id="emptyState">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M6 6h15l-1.5 9h-12z"/>
+              <path d="M6 6L5 3H2"/>
+              <circle cx="9" cy="20" r="1"/>
+              <circle cx="18" cy="20" r="1"/>
+            </svg>
+            <p class="empty-title">Your list is empty</p>
+            <p class="empty-subtitle">Add items with your voice or type below</p>
+          </div>
         </div>
 
-        <div class="suggestions-section" id="suggestionsSection" style="display: none;">
-          <h3>Suggestions</h3>
+        <section class="suggestions-section" id="suggestionsSection" style="display: none;">
+          <h3>Suggested for you</h3>
           <div class="suggestions-list" id="suggestionsList"></div>
-        </div>
+        </section>
       </section>
 
-      <section class="search-results-section" id="searchResultsSection" style="display: none;">
+      <section class="search-section" id="searchResultsSection" style="display: none;" aria-label="Search results">
         <div class="section-header">
           <h2>Search Results</h2>
-          <button id="closeSearch" class="btn btn-secondary">Close</button>
+          <button id="closeSearch" class="btn btn-ghost btn-sm">Close</button>
         </div>
         <div class="search-results" id="searchResults"></div>
       </section>
     </main>
-
-    <div class="toast-container" id="toastContainer" aria-live="polite"></div>
   </div>
+
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
   <script type="module" src="/js/app.js"></script>
 </body>
