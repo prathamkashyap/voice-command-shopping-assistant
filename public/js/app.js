@@ -12,17 +12,37 @@ class App {
     this.recommendationEngine = new RecommendationEngine(this.shoppingList, this.productCatalog);
     this.commandParser = new CommandParser(this.productCatalog);
     this.ui = new UI(this);
-    this.voiceRecognition = new VoiceRecognition(this.ui);
+    this.voiceRecognition = new VoiceRecognition({
+      onStart: () => this.ui.setListeningState(true),
+      onEnd: () => this.ui.setListeningState(false),
+      onError: (message) => this.ui.showToast(message, 'error'),
+      onResult: (transcript) => this.handleVoiceResult(transcript),
+      onNoSupport: () => {
+        this.ui.showToast('Speech recognition not supported in this browser', 'warning');
+        document.getElementById('micButton').disabled = true;
+        document.getElementById('micStatus').textContent = 'Voice input not supported';
+      }
+    });
     
     this.init();
   }
 
   async init() {
-    await this.productCatalog.load();
+    try {
+      await this.productCatalog.load();
+    } catch (error) {
+      this.ui.showToast('Failed to load product catalog. Some features may not work.', 'error');
+      console.error('Product catalog load error:', error);
+    }
     this.shoppingList.load();
     this.ui.render();
     this.setupEventListeners();
     this.updateSuggestions();
+  }
+
+  handleVoiceResult(transcript) {
+    this.ui.showRecognizedText(transcript);
+    this.processCommand(transcript);
   }
 
   setupEventListeners() {

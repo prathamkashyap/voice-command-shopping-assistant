@@ -1,6 +1,10 @@
 export class VoiceRecognition {
-  constructor(ui) {
-    this.ui = ui;
+  constructor({ onStart, onEnd, onError, onResult, onNoSupport }) {
+    this.onStart = onStart;
+    this.onEnd = onEnd;
+    this.onError = onError;
+    this.onResult = onResult;
+    this.onNoSupport = onNoSupport;
     this.recognition = null;
     this.isListening = false;
     this.initRecognition();
@@ -10,9 +14,9 @@ export class VoiceRecognition {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     
     if (!SpeechRecognition) {
-      this.ui.showToast('Speech recognition not supported in this browser', 'warning');
-      document.getElementById('micButton').disabled = true;
-      document.getElementById('micStatus').textContent = 'Voice input not supported';
+      if (this.onNoSupport) {
+        this.onNoSupport();
+      }
       return;
     }
 
@@ -24,12 +28,12 @@ export class VoiceRecognition {
 
     this.recognition.onstart = () => {
       this.isListening = true;
-      this.ui.setListeningState(true);
+      if (this.onStart) this.onStart();
     };
 
     this.recognition.onend = () => {
       this.isListening = false;
-      this.ui.setListeningState(false);
+      if (this.onEnd) this.onEnd();
     };
 
     this.recognition.onerror = (event) => {
@@ -51,7 +55,7 @@ export class VoiceRecognition {
           break;
       }
       
-      this.ui.showToast(message, 'error');
+      if (this.onError) this.onError(message);
     };
 
     this.recognition.onresult = (event) => {
@@ -59,10 +63,8 @@ export class VoiceRecognition {
         .map(r => r[0].transcript)
         .join('');
       
-      this.ui.showRecognizedText(transcript, event.results[0].isFinal);
-      
-      if (event.results[0].isFinal) {
-        this.ui.app.processCommand(transcript);
+      if (event.results[0].isFinal && this.onResult) {
+        this.onResult(transcript);
       }
     };
   }

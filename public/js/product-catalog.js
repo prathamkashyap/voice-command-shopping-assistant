@@ -4,14 +4,9 @@ export class ProductCatalog {
   }
 
   async load() {
-    try {
-      const response = await fetch('/data/products.json');
-      if (!response.ok) throw new Error('Failed to load products');
-      this.products = await response.json();
-    } catch (e) {
-      console.error('Product catalog load error:', e);
-      this.products = [];
-    }
+    const response = await fetch('/data/products.json');
+    if (!response.ok) throw new Error('Failed to load products');
+    this.products = await response.json();
   }
 
   findBestMatch(query) {
