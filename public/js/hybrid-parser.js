@@ -17,6 +17,7 @@ export class HybridIntentParser {
   }
 
   async parse(text, locale = 'en-US') {
+    const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
       const ruleResult = this.ruleParser.parse(text);
       
@@ -24,20 +25,28 @@ export class HybridIntentParser {
         if (this.llmEnabled) {
           try {
             const llmResult = await this.llmParser.parse(text, locale);
-            return this.mergeResults(ruleResult, llmResult, text);
+            const merged = this.mergeResults(ruleResult, llmResult, text);
+            const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
+            merged.latencyMs = Math.round(elapsed);
+            return merged;
           } catch (llmError) {
             console.warn('LLM fallback failed, using rule-based result:', llmError.message);
+            const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
+            ruleResult.latencyMs = Math.round(elapsed);
             return ruleResult;
           }
         }
       }
       
+      const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
+      ruleResult.latencyMs = Math.round(elapsed);
       return ruleResult;
     } catch (ruleError) {
       if (this.fallbackToLLM && this.llmEnabled) {
         try {
           const llmResult = await this.llmParser.parse(text, locale);
-          return { ...llmResult, source: 'hybrid-fallback', confidence: 0.6 };
+          const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime;
+          return { ...llmResult, source: 'hybrid-fallback', confidence: 0.6, latencyMs: Math.round(elapsed) };
         } catch (llmError) {
           throw new Error(`Both parsers failed. Rule: ${ruleError.message}, LLM: ${llmError.message}`);
         }

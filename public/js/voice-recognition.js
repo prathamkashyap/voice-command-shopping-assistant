@@ -1,9 +1,10 @@
 export class VoiceRecognition {
-  constructor({ onStart, onEnd, onError, onResult, onNoSupport }) {
+  constructor({ onStart, onEnd, onError, onResult, onInterimResult, onNoSupport }) {
     this.onStart = onStart;
     this.onEnd = onEnd;
     this.onError = onError;
     this.onResult = onResult;
+    this.onInterimResult = onInterimResult;
     this.onNoSupport = onNoSupport;
     this.recognition = null;
     this.isListening = false;
@@ -59,12 +60,23 @@ export class VoiceRecognition {
     };
 
     this.recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map(r => r[0].transcript)
-        .join('');
-      
-      if (event.results[0].isFinal && this.onResult) {
-        this.onResult(transcript);
+      let interimTranscript = '';
+      let finalTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+
+      if (interimTranscript && this.onInterimResult) {
+        this.onInterimResult(interimTranscript);
+      }
+
+      if (finalTranscript && this.onResult) {
+        this.onResult(finalTranscript.trim());
       }
     };
   }

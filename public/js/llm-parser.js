@@ -5,6 +5,15 @@ export class LLMIntentParser {
     this.apiEndpoint = options.apiEndpoint || '/api/parse-intent';
     this.timeout = options.timeout || 5000;
     this.enabled = options.enabled !== false;
+    this.fallbackToMock = options.fallbackToMock !== false;
+    this._mockParser = null;
+  }
+
+  get mockParser() {
+    if (!this._mockParser) {
+      this._mockParser = new MockLLMIntentParser();
+    }
+    return this._mockParser;
   }
 
   async parse(text, locale = 'en-US') {
@@ -12,10 +21,20 @@ export class LLMIntentParser {
       throw new Error('LLM parser not enabled');
     }
 
+    const startTime = performance.now();
     try {
       const response = await this.callLLM(text, locale);
-      return this.validateAndNormalize(response, text);
+      const result = this.validateAndNormalize(response, text);
+      result.latencyMs = Math.round(performance.now() - startTime);
+      return result;
     } catch (error) {
+      if (this.fallbackToMock) {
+        console.info('LLM endpoint unavailable, falling back to local Mock LLM parser:', error.message);
+        const mockResult = await this.mockParser.parse(text);
+        mockResult.latencyMs = Math.round(performance.now() - startTime);
+        mockResult.source = 'mock-llm';
+        return mockResult;
+      }
       console.warn('LLM parsing failed:', error.message);
       throw error;
     }

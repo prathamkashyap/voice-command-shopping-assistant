@@ -1,232 +1,114 @@
-# 🛒 Voice Command Shopping Assistant
+# Voice Command Shopping Assistant
 
-A production-ready, voice-controlled shopping list app that works **offline-first**, syncs across devices via Firebase, and understands natural language commands like *"add 2 kg milk and 3 apples"*.
+A voice-controlled shopping list web app built with vanilla JavaScript, the Web Speech API, and Firebase. Designed to work offline-first with background cloud sync.
 
-**Live Demo:** https://voice-shopping-assistant-app.web.app
-
----
-
-## ✨ Features
-
-### 🎙️ **Natural Language Voice Commands**
-- **Speak or type** commands naturally: *"add 2 bottles of milk"*, *"remove bread"*, *"find organic apples under $5"*
-- **Multi-item commands**: *"add milk, bread, and 3 apples"* — parsed in one go
-- **Quantity & unit handling**: *"2 kg rice"*, *"3 bottles of water"*, *"a dozen eggs"*
-- **Smart filters**: *"find organic apples under $5"*, *"find toothpaste by Colgate"*
-
-### 🧠 Smart Intelligence (Zero Paid APIs)
-- **Rule-based parser** handles 90%+ of commands instantly (works offline)
-- **Mock LLM fallback** for complex multi-item commands (runs in browser, no API key)
-- **Purchase history** — suggests items you buy often
-- **Seasonal suggestions** — strawberries in summer, oranges in winter
-- **Smart substitutes** — suggests oat milk when you're out of regular milk
-
-### 🔄 Real-Time Cross-Device Sync
-- Add item on phone → instantly appears on tablet
-- Multiple anonymous accounts supported (no login required)
-- **Offline-first**: works 100% without internet
-- Auto-syncs when connectivity returns
-
-### 📱 Progressive Web App (PWA)
-- **Installable** — adds to home screen like a native app
-- **Works offline** — Service Worker caches all assets
-- **Installable on iOS/Android** — home screen icon, full-screen
-- **Auto-updates** — notifies when new version is ready
-
-### 🛡️ Privacy-First
-- **Anonymous auth** — no email, no password, no tracking
-- **Runs on Firebase Free Tier (Spark)** — $0/month on current free tier
-- **Your data stays yours** — stored in your Firebase project
-- **Zero paid APIs** — no OpenAI/Anthropic keys needed
+Live Demo: https://voice-shopping-assistant-app.web.app
 
 ---
 
-## 🚀 Quick Start
+## Features
+
+- **Voice and Text Input:** Add, modify, remove, and search items using natural speech or typing. Supports multi-item commands (e.g., "add 2 bottles of milk and 3 apples").
+- **Offline-First Storage:** Instant local state updates in `localStorage` with background synchronization to Cloud Firestore when online.
+- **Cross-Device Sync:** Real-time updates across open sessions using Firestore snapshot listeners and anonymous authentication.
+- **Smart Recommendations:** Suggestions based on previous purchase history, seasonal items, and common substitutes.
+- **List Management:** Inline quantity steppers, checkbox item completion with strikethrough, estimated total cost, and category filters.
+- **PWA Support:** Installable on desktop and mobile with Service Worker caching for offline use.
+- **Text-to-Speech Feedback:** Optional audio confirmations using the Web SpeechSynthesis API.
+- **Export Options:** Copy list as plain text or Markdown, or share via native Web Share API.
+- **Dark/Light Mode:** Theme toggle with persistent user preferences.
+
+---
+
+## Architecture
+
+The application is structured around a local-first pattern with a hybrid command parser:
+
+1. **Input Layer:** Captures audio via Web Speech API or text from the input field.
+2. **Hybrid Parser:** Evaluates commands through a fast rule-based regex parser (<1ms). Complex multi-item clauses fall back to an in-browser clause parser or optional Cloud Functions endpoint.
+3. **State Management (`ShoppingList`):** Immediately applies mutations locally to ensure zero UI latency.
+4. **Sync Layer (`SyncManager`):** Queues offline operations and merges updates with Firestore using Last-Write-Wins (LWW) timestamp resolution and soft deletes.
+
+---
+
+## Getting Started
 
 ### Prerequisites
-- Node.js 18+
-- Firebase CLI (`npm i -g firebase-tools`)
 
-### Local Development
+- Node.js 18+
+
+### Running Locally
 
 ```bash
-# Install dependencies
+# Clone the repository
+git clone https://github.com/prathamkashyap/voice-command-shopping-assistant.git
+cd voice-command-shopping-assistant
+
+# Install development dependencies
 npm install
 
-# Start dev server (serves on localhost:3000)
+# Start local static server (serves on http://localhost:3000)
 npm run dev
-
-# Run tests
-npm test
-
-# Run integration tests (requires Firebase emulators)
-npm run test:integration
 ```
 
-### Deploy to Firebase
+### Running Tests
 
 ```bash
-# Deploy hosting only (free tier)
+npm test
+```
+
+All 127 unit tests run using Node's built-in test runner with zero external test dependencies.
+
+---
+
+## Project Structure
+
+```
+.
+├── public/
+│   ├── index.html              # App entry point
+│   ├── manifest.json           # Web app manifest
+│   ├── sw.js                   # Service Worker cache & offline strategies
+│   ├── css/
+│   │   └── styles.css          # Design tokens, layout, and theme styles
+│   ├── icons/                  # PWA and favicon assets
+│   ├── js/
+│   │   ├── app.js              # Application lifecycle and controller
+│   │   ├── ui.js               # Reactive DOM rendering and modal controls
+│   │   ├── shopping-list.js    # Local state model, undo history, and export helpers
+│   │   ├── sync-manager.js     # Firestore sync, conflict resolution, and offline queue
+│   │   ├── command-parser.js   # Deterministic regex NLP parser
+│   │   ├── hybrid-parser.js    # Rule and fallback parser router
+│   │   ├── llm-parser.js       # Client fallback and Cloud Function adapter
+│   │   ├── product-catalog.js  # Catalog search and fuzzy matching
+│   │   ├── recommendation-engine.js # Suggestion generation logic
+│   │   └── voice-recognition.js# Web Speech API wrapper with interim streaming
+│   └── data/
+│       └── products.json       # Product taxonomy dataset
+├── test/
+│   ├── command-parser.test.js  # Parser unit tests
+│   ├── intent-system.test.js   # Intent schema tests
+│   ├── shopping-list.test.js   # Shopping list and budget tests
+│   └── sync-manager.test.js    # Sync and conflict resolution tests
+├── firestore.rules             # Security rules for user-isolated data
+├── firebase.json               # Firebase hosting configuration
+└── package.json
+```
+
+---
+
+## Firebase Configuration & Deployment
+
+The app runs on the Firebase Spark (free) plan without requiring paid external APIs.
+
+To deploy static hosting:
+
+```bash
 firebase deploy --only hosting
-
-# Deploy everything (requires Blaze plan for Functions)
-firebase deploy
 ```
 
 ---
 
-## 🎮 Example Commands
+## License
 
-| Command | Action |
-|---------|--------|
-| `add 2 bottles of milk` | Adds 2 bottles of milk |
-| `add 3 apples, 2 bread, and 1 kg rice` | Adds multiple items at once |
-| `remove milk` | Removes milk from list |
-| `change milk to 3 liters` | Updates milk quantity |
-| `find organic apples under $5` | Searches with filters |
-| `show me seasonal fruits` | Shows seasonal suggestions |
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      BROWSER                                 │
-├─────────────────────────────────────────────────────────────┤
-│  🎙️ Voice Input → 🧠 Parser → 📝 Local List → 👁️ UI        │
-│                        ↓                                      │
-│              🔄 Sync Manager (Offline Queue)                 │
-│                        ↓                                      │
-│              🔥 Firebase (Auth + Firestore + Hosting)       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Key Technologies:**
-- **Vanilla JavaScript (ES Modules)** — no build step, no frameworks
-- **Firebase Auth** (Anonymous) + **Firestore** (real-time DB)
-- **Firebase Hosting** (global CDN, HTTPS)
-- **Service Worker** (offline caching, background sync)
-- **Web Speech API** (voice recognition)
-
----
-
-## 📁 Project Structure
-
-```
-voice-shopping-assistant/
-├── public/
-│   ├── index.html          # Main HTML
-│   ├── manifest.json       # PWA manifest
-│   ├── sw.js               # Service Worker
-│   ├── css/styles.css      # All styles
-│   ├── js/
-│   │   ├── app.js          # Main app controller
-│   │   ├── sync-manager.js # Firebase sync + offline queue
-│   │   ├── error-tracker.js # Error logging
-│   │   ├── ui.js           # UI rendering
-│   │   ├── command-parser.js # Rule-based parser
-│   │   ├── hybrid-parser.js # LLM fallback
-│   │   ├── shopping-list.js # Local list + localStorage
-│   │   ├── product-catalog.js # Product data
-│   │   ├── recommendation-engine.js # Smart suggestions
-│   │   ├── voice-recognition.js # Web Speech API
-│   │   ├── intent-schema.js # Type definitions
-│   │   ├── rule-based-parser.js # Rule parser wrapper
-│   │   └── llm-parser.js # LLM integration
-│   ├── css/styles.css
-│   └── data/products.json
-├── functions/              # Cloud Functions (optional, for real LLM)
-├── firestore.rules         # Security rules
-├── firestore.indexes.json
-├── firebase.json           # Firebase config
-└── package.json
-```
-
----
-
-## 🔐 Security & Privacy
-
-| Feature | Implementation |
-|---------|----------------|
-| **Authentication** | Firebase Anonymous Auth (no PII) |
-| **Data Access** | Firestore rules: users only see their own data |
-| **Data Storage** | Your Firebase project (you own it) |
-| **Network** | HTTPS only, CSP headers, no third-party scripts |
-| **Offline Data** | Stored in browser localStorage (not encrypted) |
-
----
-
-## 💰 Cost Breakdown
-
-| Service | Firebase Tier | Monthly Cost (Current Free Tier) |
-|---------|---------------|----------------------------------|
-| Authentication | Spark (Free) | $0 |
-| Firestore (1 GiB, 50K reads/day) | Spark (Free) | $0 |
-| Hosting (10 GB, 360 MB/day) | Spark (Free) | $0 |
-| Functions (125K invocations) | Spark (Free) | $0 |
-| **Total** | | **$0/month on current free tier** |
-
-> ⚠️ Firebase pricing may change. Check [Firebase pricing](https://firebase.google.com/pricing) for current limits.
-
----
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-npm test
-
-# Run integration tests (requires Firebase emulators)
-npm run test:integration
-```
-
-**Test Coverage:** 120 tests passing across 31 suites
-
----
-
-## 📁 Project Structure
-
-```
-voice-shopping-assistant/
-├── public/
-│   ├── index.html          # Main HTML
-│   ├── manifest.json       # PWA manifest
-│   ├── sw.js               # Service Worker
-│   ├── css/styles.css      # All styles
-│   ├── js/
-│   │   ├── app.js          # Main app controller
-│   │   ├── sync-manager.js # Firebase sync + offline queue
-│   │   ├── error-tracker.js # Error logging
-│   │   ├── ui.js           # UI rendering
-│   │   ├── command-parser.js # Rule-based parser
-│   │   ├── hybrid-parser.js # LLM fallback
-│   │   ├── shopping-list.js # Local list + localStorage
-│   │   ├── product-catalog.js # Product data
-│   │   ├── recommendation-engine.js # Smart suggestions
-│   │   ├── voice-recognition.js # Web Speech API
-│   │   ├── intent-schema.js # Type definitions
-│   │   ├── rule-based-parser.js # Rule parser wrapper
-│   │   └── llm-parser.js # LLM integration
-│   ├── css/styles.css
-│   └── data/products.json
-├── functions/              # Cloud Functions (optional, for real LLM)
-├── firestore.rules         # Security rules
-├── firestore.indexes.json
-├── firebase.json           # Firebase config
-└── package.json
-```
-
----
-
-## 📝 Notes
-
-- **Speech recognition** depends on browser support. Chrome is recommended for voice features. When speech recognition is unavailable, the text command input can still be used.
-- **Real LLM parsing** (optional): Requires Blaze plan + Cloud Functions deployment. The mock LLM fallback works fully client-side with no API keys.
-- **Firebase Functions** (`/api/parse-intent`) require Blaze plan. The mock LLM fallback works fully client-side with no API keys.
-
----
-
-## 📄 License
-
-MIT License — feel free to use, modify, and distribute.
+MIT

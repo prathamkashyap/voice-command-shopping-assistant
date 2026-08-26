@@ -19,30 +19,40 @@ class App {
       fallbackToLLM: true,
       apiEndpoint: '/api/parse-intent'
     });
+    
+    // Voice feedback & diagnostics state
+    this.ttsEnabled = localStorage.getItem('voice_shopping_tts') !== 'false';
+    this.lastIntent = null;
+    this.activeCategory = 'All';
+    this.itemSearchQuery = '';
+
     this.ui = new UI(this);
     this.voiceRecognition = new VoiceRecognition({
       onStart: () => this.ui.setListeningState(true),
       onEnd: () => this.ui.setListeningState(false),
-      onError: (message) => this.ui.showToast(message, 'error'),
+      onError: (message) => {
+        this.ui.showToast(message, 'error');
+        this.speak('Sorry, there was an error with voice recognition.');
+      },
+      onInterimResult: (transcript) => this.ui.showRecognizedText(transcript, false),
       onResult: (transcript) => this.handleVoiceResult(transcript),
       onNoSupport: () => {
         this.ui.showToast('Speech recognition not supported in this browser', 'warning');
-        document.getElementById('micButton').disabled = true;
-        document.getElementById('micStatus').textContent = 'Voice input not supported';
+        const micBtn = document.getElementById('micButton');
+        if (micBtn) micBtn.disabled = true;
+        const micStatus = document.getElementById('micStatus');
+        if (micStatus) micStatus.textContent = 'Voice input not supported';
       }
     });
     
     // Initialize error tracking
     this.initErrorTracking();
-    
     this.init();
   }
 
   initErrorTracking() {
-    // Initialize error tracker
     errorTracker.setUserId(this.syncManager.getUserId() || 'anonymous');
     
-    // Override console.error to capture errors
     const originalError = console.error;
     console.error = (...args) => {
       originalError.apply(console, args);
@@ -52,7 +62,6 @@ class App {
       }
     };
     
-    // Capture unhandled promise rejections globally
     window.addEventListener('unhandledrejection', (event) => {
       captureException(event.reason, { type: 'unhandled_rejection' });
     });
@@ -69,7 +78,6 @@ class App {
     this.ui.render();
     this.setupEventListeners();
     this.updateSuggestions();
-    
     this.initializeSync();
   }
 
@@ -77,12 +85,10 @@ class App {
     try {
       await this.syncManager.init();
       if (this.syncManager.isEnabled()) {
-        // Set user ID in error tracker after auth
         errorTracker.setUserId(this.syncManager.getUserId());
         await this.syncManager.initialSync(this.shoppingList);
       }
       
-      // Register sync status callback
       this.syncManager.onSyncStatusChange((status) => {
         this.ui.setSyncStatus(status);
       });
@@ -91,7 +97,6 @@ class App {
       console.warn('Sync initialization failed:', error.message);
     }
     
-    // Register service worker
     this.registerServiceWorker();
   }
 
@@ -103,14 +108,13 @@ class App {
         
         registration.addEventListener('updatefound', () => {
           const newWorker = registration.installing;
-          newWorker.addEventListener('statechange', () => {
+          newWorker?.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
               this.ui.showToast('New version available! Refresh to update.', 'info');
             }
           });
         });
         
-        // Listen for messages from service worker
         navigator.serviceWorker.addEventListener('message', (event) => {
           if (event.data && event.data.type === 'SYNC_COMPLETE') {
             this.ui.showToast('Sync completed', 'success');
@@ -122,22 +126,87 @@ class App {
     }
   }
 
+  speak(text) {
+    if (!this.ttsEnabled || !('speechSynthesis' in window) || !text) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.05;
+      utterance.pitch = 1.0;
+      const lang = document.getElementById('language')?.value || 'en-US';
+      utterance.lang = lang;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('TTS playback error:', e);
+    }
+  }
+
+  toggleTTS() {
+    this.ttsEnabled = !this.ttsEnabled;
+    localStorage.setItem('voice_shopping_tts', String(this.ttsEnabled));
+    this.ui.updateTTSToggleUI(this.ttsEnabled);
+    this.ui.showToast(this.ttsEnabled ? 'Voice feedback enabled' : 'Voice feedback muted', 'info');
+  }
+
   handleVoiceResult(transcript) {
-    this.ui.showRecognizedText(transcript);
+    this.ui.showRecognizedText(transcript, true);
     this.processCommand(transcript);
   }
 
   setupEventListeners() {
-    document.getElementById('micButton').addEventListener('click', () => this.toggleVoiceInput());
-    document.getElementById('sendCommand').addEventListener('click', () => this.handleTextCommand());
-    document.getElementById('textCommand').addEventListener('keypress', (e) => {
+    document.getElementById('micButton')?.addEventListener('click', () => this.toggleVoiceInput());
+    document.getElementById('sendCommand')?.addEventListener('click', () => this.handleTextCommand());
+    document.getElementById('textCommand')?.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') this.handleTextCommand();
     });
-    document.getElementById('clearList').addEventListener('click', () => this.clearList());
-    document.getElementById('closeSearch').addEventListener('click', () => this.ui.hideSearchResults());
-    document.getElementById('language').addEventListener('change', (e) => {
+    document.getElementById('clearList')?.addEventListener('click', () => this.clearList());
+    document.getElementById('closeSearch')?.addEventListener('click', () => this.ui.hideSearchResults());
+    document.getElementById('language')?.addEventListener('change', (e) => {
       this.voiceRecognition.setLanguage(e.target.value);
     });
+
+    // Quick Command chips delegation
+    document.querySelectorAll('.prompt-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const text = chip.dataset.prompt || chip.textContent.trim();
+        const input = document.getElementById('textCommand');
+        if (input) input.value = text;
+        this.processCommand(text);
+      });
+    });
+
+    // Theme toggle
+    document.getElementById('themeToggle')?.addEventListener('click', () => this.ui.toggleTheme());
+    // TTS toggle
+    document.getElementById('ttsToggle')?.addEventListener('click', () => this.toggleTTS());
+    // AI Inspector toggle
+    document.getElementById('inspectorToggle')?.addEventListener('click', () => this.ui.toggleInspector());
+    // Architecture Modal toggle
+    document.getElementById('archModalToggle')?.addEventListener('click', () => this.ui.toggleArchModal(true));
+    // Export Modal toggle
+    document.getElementById('exportListBtn')?.addEventListener('click', () => this.ui.toggleExportModal(true));
+    
+    // Category tabs delegation
+    document.getElementById('categoryFilters')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.cat-filter-btn');
+      if (btn) {
+        this.setCategoryFilter(btn.dataset.category || 'All');
+      }
+    });
+
+    // List item live search
+    document.getElementById('itemSearchInput')?.addEventListener('input', (e) => {
+      this.itemSearchQuery = e.target.value.toLowerCase().trim();
+      this.ui.renderShoppingList();
+    });
+  }
+
+  setCategoryFilter(category) {
+    this.activeCategory = category;
+    document.querySelectorAll('.cat-filter-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.category === category);
+    });
+    this.ui.renderShoppingList();
   }
 
   toggleVoiceInput() {
@@ -150,20 +219,23 @@ class App {
 
   async handleTextCommand() {
     const input = document.getElementById('textCommand');
-    const text = input.value.trim();
+    const text = input?.value.trim();
     if (!text) return;
     
-    input.value = '';
+    if (input) input.value = '';
     await this.processCommand(text);
   }
 
   async processCommand(text) {
-    this.ui.showRecognizedText(text);
+    this.ui.showRecognizedText(text, true);
     this.ui.setStatus('processing');
 
     try {
       const locale = document.getElementById('language')?.value || 'en-US';
       const intent = await this.intentParser.parse(text, locale);
+      this.lastIntent = intent;
+      this.ui.updateDiagnostics(intent);
+      
       await this.executeIntent(intent);
       this.ui.setStatus('success');
     } catch (error) {
@@ -173,25 +245,31 @@ class App {
       });
       this.ui.setStatus('error');
       this.ui.showToast(error.message, 'error');
+      this.speak("I couldn't process that command.");
     }
   }
 
   async executeIntent(intent) {
+    const speechPhrases = [];
+
     switch (intent.action) {
       case 'add':
       case 'remove':
       case 'modify':
         for (const item of intent.items) {
-          await this.executeSingleItemCommand(intent.action, item);
+          const phrase = await this.executeSingleItemCommand(intent.action, item);
+          if (phrase) speechPhrases.push(phrase);
         }
         break;
       case 'multi':
         for (const item of intent.items) {
-          await this.executeSingleItemCommand('add', item);
+          const phrase = await this.executeSingleItemCommand('add', item);
+          if (phrase) speechPhrases.push(phrase);
         }
         break;
       case 'search':
         await this.searchProducts(intent.searchFilters);
+        speechPhrases.push(`Found search results for ${intent.searchFilters.query || 'products'}`);
         break;
       default:
         throw new Error(`Unknown action: ${intent.action}`);
@@ -199,6 +277,10 @@ class App {
 
     if (intent.action !== 'search') {
       this.ui.renderShoppingList();
+    }
+
+    if (speechPhrases.length > 0) {
+      this.speak(speechPhrases.join('. '));
     }
   }
 
@@ -212,14 +294,11 @@ class App {
 
     switch (action) {
       case 'add':
-        await this.addItem(parsed);
-        break;
+        return await this.addItem(parsed);
       case 'remove':
-        await this.removeItem(parsed);
-        break;
+        return await this.removeItem(parsed);
       case 'modify':
-        await this.modifyItem(parsed);
-        break;
+        return await this.modifyItem(parsed);
     }
   }
 
@@ -231,13 +310,16 @@ class App {
       category: product?.category || 'Other',
       quantity: parsed.quantity || 1,
       unit: parsed.unit || (product?.size || 'pcs'),
-      productId: product?.id
+      productId: product?.id,
+      completed: false
     };
     
     this.shoppingList.add(item);
     this.recommendationEngine.recordPurchase([item]);
-    this.ui.showToast(`Added ${item.quantity} ${item.unit} of ${item.name}`, 'success');
+    const message = `Added ${item.quantity} ${item.unit} of ${item.name}`;
+    this.ui.showToast(message, 'success');
     this.updateSuggestions();
+    return message;
   }
 
   async removeItem(parsed) {
@@ -247,8 +329,10 @@ class App {
     }
     
     this.shoppingList.remove(item.id);
-    this.ui.showToast(`Removed ${item.name}`, 'success');
+    const message = `Removed ${item.name}`;
+    this.ui.showToast(message, 'success');
     this.updateSuggestions();
+    return message;
   }
 
   async modifyItem(parsed) {
@@ -265,8 +349,10 @@ class App {
     }
     
     this.shoppingList.update(item);
-    this.ui.showToast(`Updated ${item.name} to ${item.quantity} ${item.unit}`, 'success');
+    const message = `Updated ${item.name} to ${item.quantity} ${item.unit}`;
+    this.ui.showToast(message, 'success');
     this.updateSuggestions();
+    return message;
   }
 
   async searchProducts(searchFilters) {
@@ -281,6 +367,19 @@ class App {
     this.ui.showSearchResults(results, searchFilters);
   }
 
+  toggleItemCompleted(id) {
+    const item = this.shoppingList.toggleCompleted(id);
+    if (item) {
+      this.ui.renderShoppingList();
+    }
+  }
+
+  adjustQuantity(id, delta) {
+    const updated = this.shoppingList.incrementQuantity(id, delta);
+    this.ui.renderShoppingList();
+    this.updateSuggestions();
+  }
+
   updateSuggestions() {
     const suggestions = this.recommendationEngine.getSuggestions();
     this.ui.renderSuggestions(suggestions);
@@ -293,6 +392,7 @@ class App {
       this.shoppingList.clear();
       this.ui.renderShoppingList();
       this.ui.showToast('Shopping list cleared', 'info');
+      this.speak('Shopping list cleared');
       this.updateSuggestions();
     }
   }

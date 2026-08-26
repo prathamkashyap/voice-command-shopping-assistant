@@ -134,19 +134,41 @@ export class SyncManager {
 
   async syncItems(localItems, deletedItemIds = []) {
     if (!this.enabled || !this.userId) return false;
-    if (this.syncInProgress) return false;
 
+    // If offline, queue the operation
+    if (!this.isOnline) {
+      console.log('[SyncManager] Offline - queueing sync operation');
+      if (deletedItemIds && deletedItemIds.length > 0) {
+        for (const delId of deletedItemIds) {
+          this.queueOfflineOperation({
+            type: 'delete',
+            deletedId: delId
+          });
+        }
+      }
+      if (localItems && localItems.length > 0) {
+        for (const item of localItems) {
+          this.queueOfflineOperation({
+            type: 'update',
+            item
+          });
+        }
+      }
+      return true; // Return true to indicate operation was queued
+    }
+
+    if (this.syncInProgress) return false;
     this.syncInProgress = true;
 
     try {
-      const { collection, doc, writeBatch, serverTimestamp, deleteField } = await importFirestore();
+      const { collection, doc, writeBatch, serverTimestamp } = await importFirestore();
 
       // Use collection reference for shoppingList: users/{userId}/shoppingList (3 segments = valid collection)
       const itemsRef = collection(this.db, 'users', this.userId, 'shoppingList');
       const batch = writeBatch(this.db);
 
       // Write/update existing items
-      for (const item of localItems) {
+      for (const item of (localItems || [])) {
         const itemRef = doc(itemsRef, item.id);
         
         // Prepare item data for Firestore
@@ -159,7 +181,7 @@ export class SyncManager {
         };
         
         // Remove client-only fields and undefined values that Firestore doesn't accept
-        const { source, ...firestoreData } = itemData;
+        const { source, _updatedAtMillis, ...firestoreData } = itemData;
         
         // Filter out undefined values (Firestore doesn't accept undefined)
         Object.keys(firestoreData).forEach(key => {
@@ -413,10 +435,7 @@ export class SyncManager {
     if (!this.enabled || !this.userId || this.unsubscribeSnapshot) return;
 
     try {
-      const { collection, doc, onSnapshot, query } = await importFirestore();
-      
-      const shoppingListRef = doc(this.db, 'users', this.userId, 'shoppingList');
-      const itemsRef = collection(shoppingListRef, 'shoppingList');
+      const itemsRef = collection(this.db, 'users', this.userId, 'shoppingList');
       
       // Listen for real-time changes
       this.unsubscribeSnapshot = onSnapshot(itemsRef, (snapshot) => {
@@ -572,29 +591,6 @@ export class SyncManager {
         await this.syncItems([], itemIds);
         break;
     }
-  }
-
-  /**
-   * Override syncItems to queue offline when offline
-   */
-  async syncItems(localItems, deletedItemIds = []) {
-    if (!this.enabled || !this.userId) return false;
-    if (this.syncInProgress) return false;
-
-    // If offline, queue the operation
-    if (!this.isOnline) {
-      console.log('[SyncManager] Offline - queueing sync operation');
-      this.queueOfflineOperation({
-        type: deletedItemIds.length > 0 ? 'delete' : 'update',
-        item: localItems[0],
-        deletedId: deletedItemIds[0],
-        itemIds: deletedItemIds
-      });
-      return true; // Return true to indicate operation was queued
-    }
-
-    // ... existing syncItems implementation
-    // [rest of existing implementation]
   }
 }
 

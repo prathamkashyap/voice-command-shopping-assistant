@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shopping-assistant-v1';
+const CACHE_NAME = 'shopping-assistant-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -16,7 +16,10 @@ const STATIC_ASSETS = [
   '/js/llm-parser.js',
   '/js/sync-manager.js',
   '/data/products.json',
-  '/manifest.json'
+  '/manifest.json',
+  '/icons/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png'
 ];
 
 const CACHE_STRATEGIES = {

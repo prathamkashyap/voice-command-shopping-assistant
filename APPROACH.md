@@ -1,111 +1,93 @@
-# Approach
+# Technical Approach & System Design
 
-This project was built as a production-ready, voice-controlled shopping assistant that works **completely offline**, syncs across devices via Firebase, and understands natural language commands like *"add 2 kg milk and 3 apples"*.
+This document details the architectural decisions, trade-offs, and engineering principles behind the **Voice Command Shopping Assistant**.
 
-## Architecture Overview
+---
 
-The app follows a **local-first, sync-later** architecture:
+## 1. Core Architectural Pillars
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      BROWSER                                 │
-├─────────────────────────────────────────────────────────────┤
-│  🎙️ Voice Input → 🧠 Parser → 📝 Local List → 👁️ UI        │
-│                        ↓                                      │
-│              🔄 Sync Manager (Offline Queue)                 │
-│                        ↓                                      │
-│              🔥 Firebase (Auth + Firestore + Hosting)        │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                     CLIENT RUNTIME                                     │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│  🎙️ Web Speech API ──> 🧠 Hybrid Intent Engine ──> 📝 ShoppingList (State & Reducer)  │
+│  (Interim Streaming)     ├─ Deterministic Regex       ├─ Check-off / Completed         │
+│                          ├─ Mock LLM (In-Browser)     ├─ Quantity Steppers             │
+│                          └─ Cloud LLM Endpoint        └─ Budget Calculator             │
+│                                                                  │                     │
+│                                                       💾 localStorage (LWW State)      │
+│                                                                  │                     │
+│                                                   🔄 SyncManager (Offline Queue)       │
+│                                                                  │                     │
+│                                             🌐 Real-Time Firestore (LWW Conflict Res)  │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Core Design Decisions
+### 1.1 Local-First Mutation Flow
+- Every mutation (add, edit, toggle completed, remove, clear) immediately alters client state and persists to `localStorage`.
+- UI renders synchronously with zero blocking network latency.
+- The `SyncManager` captures mutations into an offline-resilient queue when disconnected, and flushes operations in atomic batches upon reconnection.
 
-### 1. Local-First Architecture
-- All mutations hit `localStorage` first → UI updates instantly
-- Firestore sync happens **asynchronously** in background
-- App works **100% offline** — no network required for core features
+### 1.2 Hybrid NLP Routing Architecture
+- **Layer 1: Deterministic Rule-Based Parser (&lt;1ms)**
+  - Matches 90%+ standard shopping commands (quantities, units, simple add/remove/search/modify).
+  - Uses normalized regular expressions and keyword taxonomies with 0 dependencies.
+- **Layer 2: Browser Mock LLM Clause Parser (1–3ms)**
+  - Extracts multi-item clauses (e.g., *"add 2 milk, 3 apples, and 1 loaf of bread"*).
+  - Runs 100% offline inside the browser without requiring external LLM API keys.
+- **Layer 3: Cloud Function LLM Endpoint (Optional)**
+  - Falls back to OpenAI / Anthropic via Firebase Cloud Functions when configured.
 
-### 2. Parser Architecture (Hybrid)
-- **Rule-based parser** (default): Fast, offline, handles 90%+ of commands
-- **Mock LLM fallback**: Handles multi-item commands like *"add milk, bread, and apples"*
-- **Real LLM ready**: Architecture supports plugging in real LLM via Cloud Functions (requires Blaze plan)
-
-### 3. Data Model
-```
-users/{uid}/shoppingList/{itemId}
-```
-- `itemId`: UUID (crypto.randomUUID)
-- `updatedAt`: serverTimestamp() for LWW conflict resolution
-- `deleted`: boolean (soft deletes for undo support)
-
-### 3. Sync Strategy (Phase 3b)
-- **Local-first**: localStorage is source of truth
-- **Initial sync**: Load local → fetch remote → LWW merge → push merged
-- **Real-time**: `onSnapshot` listener merges remote changes via LWW
-- **Offline queue**: Mutations queued in localStorage, flushed on reconnect
-- **Conflict resolution**: LWW by `updatedAt` (server timestamp preferred)
-
-### 4. Error Handling
-- Local `ErrorTracker` captures unhandled errors + console.error
-- Queued in localStorage, flushed via `navigator.sendBeacon` / fetch
-- Correlated with anonymous user ID for debugging
+### 1.3 Multi-Device Synchronization & Conflict Resolution
+- **Last-Write-Wins (LWW):** Every item document carries an `updatedAt` client timestamp and Firestore `serverTimestamp()`.
+- **Soft Deletion (`deleted: true`):** Ensures remote deletions propagate across active devices without resurrecting locally removed items.
+- **Snapshot Listener:** Subscribes to `/users/{uid}/shoppingList` to reflect changes live across devices in real time.
 
 ---
 
-## Tech Stack (Zero Build Step)
+## 2. Technology Stack & Zero-Cost Rationale
 
-| Layer | Technology |
-|-------|------------|
-| Language | Vanilla JavaScript (ES Modules) |
-| UI | Custom CSS + vanilla JS (no framework) |
-| Voice | Web Speech API (Chrome recommended) |
-| Auth | Firebase Anonymous Auth |
-| Database | Cloud Firestore (real-time) |
-| Hosting | Firebase Hosting (global CDN) |
-| Offline | Service Worker (Workbox-style) |
-| Testing | Node.js built-in test runner |
-
----
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `public/js/app.js` | Main app controller |
-| `public/js/sync-manager.js` | Firebase sync + offline queue + real-time |
-| `public/js/command-parser.js` | Rule-based NLP parser |
-| `public/js/hybrid-parser.js` | LLM fallback for multi-item |
-| `public/js/sync-manager.js` | Real-time + offline queue |
-| `public/js/error-tracker.js` | Error tracking + local queue |
-| `public/js/command-parser.js` | Rule-based NLP |
-| `public/js/shopping-list.js` | Local list + localStorage |
-| `public/js/ui.js` | DOM rendering + sync status UI |
-| `public/sw.js` | Service Worker (offline + background sync) |
-| `firestore.rules` | User-isolated data access |
+| Layer | Technology | Rationale & Cost Impact |
+|---|---|---|
+| **Frontend Framework** | Vanilla JS (ES Modules) | Instant load times, zero build tooling, zero bundle overhead |
+| **Styling** | Custom CSS Variables + Glassmorphism | Native theme switching (Dark/Light), 60fps animations |
+| **Voice Input** | Web Speech API | Native browser speech recognition at **$0 cost** |
+| **Speech Output** | Web SpeechSynthesis API | Text-to-Speech audio confirmations at **$0 cost** |
+| **Storage & Sync** | Cloud Firestore + LocalStorage | Instant local mutations + real-time cloud sync under free Spark tier |
+| **Authentication** | Firebase Anonymous Auth | Zero friction, zero PII, isolated user document trees |
+| **Hosting & PWA** | Firebase Global CDN + ServiceWorker | Offline asset caching and standalone home screen experience |
+| **Testing** | Node.js Built-in Test Runner (`node --test`) | Zero testing dependencies, instant sub-second test execution |
 
 ---
 
-## Deployment Strategy
+## 3. Key Components Reference
 
-1. **Hosting only** (free tier): `firebase deploy --only hosting`
-2. **Full deploy** (requires Blaze): `firebase deploy`
-
-The app works fully on Firebase **Spark (free) plan** — no Blaze upgrade needed for core features.
+| Module | File | Responsibility |
+|---|---|---|
+| **App Controller** | `public/js/app.js` | Coordinates speech recognition, NLP parsing, TTS audio, and state updates |
+| **UI View** | `public/js/ui.js` | Reactive DOM updates, inspector drawer, budget counter, and modal controls |
+| **Shopping State** | `public/js/shopping-list.js` | In-memory & localStorage state, undo stack, budget estimation, and markdown export |
+| **Sync Manager** | `public/js/sync-manager.js` | Firestore real-time listeners, LWW conflict merger, and offline write queue |
+| **Rule Parser** | `public/js/command-parser.js` | Regex-based deterministic intent recognition |
+| **Hybrid Parser** | `public/js/hybrid-parser.js` | Multi-item router, LLM fallback coordinator, and latency tracker |
+| **LLM Parser** | `public/js/llm-parser.js` | Cloud function invocation and local Mock LLM clause parser |
+| **Catalog** | `public/js/product-catalog.js` | Fuzzy matching against catalog and pricing data |
+| **Recommendations** | `public/js/recommendation-engine.js` | Purchase frequency, seasonal trends, and smart dietary substitutes |
 
 ---
 
-## Testing Strategy
+## 4. Verification & Testing Strategy
 
-- **Unit tests**: 120 tests (Node.js built-in test runner)
-- **Integration tests**: Firebase emulator for Firestore + Functions
-- **No external test dependencies** — uses Node.js built-in test runner
+- **Unit Tests:** 127 automated unit tests covering regex patterns, hybrid merger logic, state undo, quantity steppers, budget calculations, and LWW edge cases.
+- **Integration Tests:** Verifies Firestore synchronization and Cloud Function endpoints via Firebase Local Emulator Suite.
+- **Execution Command:** `npm test`
+
+- **No external test dependencies** — zero bloat, runs natively with `node --test`.
 
 ---
 
-## Future Extensions
+## 5. Future Roadmap & Extensions
 
-- Real LLM parsing (requires Blaze + Cloud Functions)
-- Push notifications (service worker ready)
-- Shared lists (multi-user)
-- Barcode scanning
-- Recipe integration
+- **Multi-tenant Household Sharing:** Real-time collaboration between household accounts using shared Firestore collection groups.
+- **Camera Barcode & Receipt OCR:** Progressive Web App barcode scanner using WebCodecs/Shape Detection API.
+- **Smart Recipe Import:** Voice command to parse ingredients from recipe URLs directly into categorized shopping list items.

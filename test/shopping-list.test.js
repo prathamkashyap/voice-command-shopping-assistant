@@ -324,4 +324,110 @@ describe('ShoppingList', () => {
       assert.deepEqual(deletedIds, []);
     });
   });
+
+  describe('toggleCompleted()', () => {
+    let testList;
+
+    before(() => {
+      testList = new ShoppingList();
+      global.localStorage = {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {}
+      };
+    });
+
+    it('should toggle completed state of an item', () => {
+      testList.items = [{ id: 1, name: 'Milk', category: 'Dairy', quantity: 1, unit: 'L', completed: false }];
+      const toggled = testList.toggleCompleted(1);
+      assert.equal(toggled.completed, true);
+      assert.equal(testList.completedCount, 1);
+
+      testList.toggleCompleted(1);
+      assert.equal(testList.items[0].completed, false);
+      assert.equal(testList.completedCount, 0);
+    });
+
+    it('should return null for non-existent item', () => {
+      testList.items = [];
+      assert.equal(testList.toggleCompleted(999), null);
+    });
+  });
+
+  describe('incrementQuantity()', () => {
+    let testList;
+
+    before(() => {
+      testList = new ShoppingList();
+      global.localStorage = {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {}
+      };
+    });
+
+    it('should increment item quantity', () => {
+      testList.items = [{ id: 1, name: 'Milk', category: 'Dairy', quantity: 1, unit: 'L' }];
+      testList.incrementQuantity(1, 2);
+      assert.equal(testList.items[0].quantity, 3);
+    });
+
+    it('should decrement item quantity', () => {
+      testList.items = [{ id: 1, name: 'Milk', category: 'Dairy', quantity: 3, unit: 'L' }];
+      testList.incrementQuantity(1, -1);
+      assert.equal(testList.items[0].quantity, 2);
+    });
+
+    it('should remove item when quantity drops to 0 or below', () => {
+      testList.items = [{ id: 1, name: 'Milk', category: 'Dairy', quantity: 1, unit: 'L' }];
+      testList.incrementQuantity(1, -1);
+      assert.equal(testList.items.length, 0);
+    });
+  });
+
+  describe('getEstimatedTotal() and export', () => {
+    let testList;
+    const mockCatalog = {
+      products: [
+        { id: 1, name: 'Milk', price: 3.50 },
+        { id: 2, name: 'Bread', price: 2.00 }
+      ],
+      getById(id) {
+        return this.products.find(p => p.id === id);
+      },
+      findBestMatch(name) {
+        return this.products.find(p => p.name.toLowerCase() === name.toLowerCase());
+      }
+    };
+
+    before(() => {
+      testList = new ShoppingList();
+      global.localStorage = {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {}
+      };
+    });
+
+    it('should calculate estimated total cost', () => {
+      testList.items = [
+        { id: 1, name: 'Milk', category: 'Dairy', quantity: 2, unit: 'L', productId: 1 },
+        { id: 2, name: 'Bread', category: 'Bakery', quantity: 3, unit: 'loaf', productId: 2 }
+      ];
+      // 2 * 3.50 + 3 * 2.00 = 7.00 + 6.00 = 13.00
+      const total = testList.getEstimatedTotal(mockCatalog);
+      assert.equal(total, 13.00);
+    });
+
+    it('should export list as text and markdown', () => {
+      testList.items = [
+        { id: 1, name: 'Milk', category: 'Dairy', quantity: 2, unit: 'L', completed: false }
+      ];
+      const text = testList.exportAsText();
+      assert.ok(text.includes('Milk - 2 L'));
+
+      const md = testList.exportAsMarkdown();
+      assert.ok(md.includes('- [ ] **Milk** (2 L)'));
+    });
+  });
 });

@@ -186,8 +186,92 @@ export class ShoppingList {
     return itemIdsToDelete;
   }
 
+  toggleCompleted(id) {
+    const item = this.items.find(i => i.id === id);
+    if (item) {
+      item.completed = !item.completed;
+      item.updatedAt = this._now();
+      this.save();
+      return item;
+    }
+    return null;
+  }
+
+  incrementQuantity(id, delta = 1) {
+    const item = this.items.find(i => i.id === id);
+    if (!item) return null;
+
+    const newQty = (item.quantity || 1) + delta;
+    if (newQty <= 0) {
+      this.remove(id);
+      return null;
+    }
+
+    item.quantity = Number((newQty).toFixed(2));
+    item.updatedAt = this._now();
+    this.save();
+    return item;
+  }
+
+  getEstimatedTotal(productCatalog) {
+    if (!productCatalog || !productCatalog.products) return 0;
+    let total = 0;
+    for (const item of this.items) {
+      const product = item.productId 
+        ? productCatalog.getById(item.productId) 
+        : productCatalog.findBestMatch(item.name);
+      if (product && typeof product.price === 'number') {
+        total += product.price * (item.quantity || 1);
+      }
+    }
+    return Number(total.toFixed(2));
+  }
+
+  exportAsText() {
+    if (this.items.length === 0) return 'Shopping list is empty.';
+    const dateStr = new Date().toLocaleDateString();
+    let text = `🛒 Shopping List (${dateStr})\n`;
+    text += `Total items: ${this.items.length}\n\n`;
+
+    const grouped = this.groupedByCategory;
+    for (const [category, items] of Object.entries(grouped)) {
+      text += `[${category.toUpperCase()}]\n`;
+      for (const item of items) {
+        const mark = item.completed ? '✓ ' : '• ';
+        const unit = item.unit ? ` ${item.unit}` : '';
+        text += `${mark}${item.name} - ${item.quantity}${unit}\n`;
+      }
+      text += '\n';
+    }
+    return text.trim();
+  }
+
+  exportAsMarkdown() {
+    if (this.items.length === 0) return '_Shopping list is empty._';
+    const dateStr = new Date().toLocaleDateString();
+    let md = `### 🛒 Shopping List - ${dateStr}\n\n`;
+
+    const grouped = this.groupedByCategory;
+    for (const [category, items] of Object.entries(grouped)) {
+      md += `#### ${category}\n`;
+      for (const item of items) {
+        const check = item.completed ? '[x]' : '[ ]';
+        const unit = item.unit ? ` ${item.unit}` : '';
+        md += `- ${check} **${item.name}** (${item.quantity}${unit})\n`;
+      }
+      md += '\n';
+    }
+    return md.trim();
+  }
+
   getAll() {
-    return [...this.items].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+    return [...this.items].sort((a, b) => {
+      // Uncompleted items first, then by category, then by name
+      if (Boolean(a.completed) !== Boolean(b.completed)) {
+        return a.completed ? 1 : -1;
+      }
+      return a.category.localeCompare(b.category) || a.name.localeCompare(b.name);
+    });
   }
 
   get groupedByCategory() {
@@ -201,5 +285,9 @@ export class ShoppingList {
 
   get totalItems() {
     return this.items.length;
+  }
+
+  get completedCount() {
+    return this.items.filter(i => i.completed).length;
   }
 }
