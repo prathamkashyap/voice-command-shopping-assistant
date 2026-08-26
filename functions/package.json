@@ -1,0 +1,19 @@
+{
+  "name": "voice-shopping-functions",
+  "version": "1.0.0",
+  "description": "Firebase Functions for voice shopping assistant",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-functions": "^6.0.0",
+    "firebase-admin": "^12.0.0",
+    "openai": "^4.28.0",
+    "@anthropic-ai/sdk": "^0.20.0"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^3.1.0"
+  },
+  "private": true
+}

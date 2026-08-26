@@ -5,6 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Shopping Assistant</title>
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#4F46E5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Shopping Assistant">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+    import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+    import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDTDOJ4e5O649HGB7K16KilragGbpH8Pvs",
+      authDomain: "voice-shopping-assistant-app.firebaseapp.com",
+      projectId: "voice-shopping-assistant-app",
+      storageBucket: "voice-shopping-assistant-app.firebasestorage.app",
+      messagingSenderId: "590398854098",
+      appId: "1:590398854098:web:487a8fe79cd74834e9ee0b",
+      measurementId: "G-312M73JHYQ"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    window.firebaseAuth = getAuth(app);
+    window.firebaseDb = getFirestore(app);
+  </script>
 </head>
 <body>
   <div class="app">
@@ -17,16 +42,21 @@
         </span>
         <h1>Shopping Assistant</h1>
       </div>
-      <div class="language-select">
-        <label for="language">Voice input language</label>
-        <select id="language" title="Sets the speech recognition language. Command parsing is English-only.">
-          <option value="en-US">English (US)</option>
-          <option value="hi-IN">Hindi (India)</option>
-          <option value="te-IN">Telugu (India)</option>
-          <option value="ta-IN">Tamil (India)</option>
-        </select>
-      </div>
-    </header>
+      <div class="header-right">
+        <div class="sync-status" id="syncStatus" title="Sync status">
+          <span class="sync-indicator" aria-hidden="true"></span>
+          <span class="sync-label">Synced</span>
+        </div>
+        <div class="language-select">
+          <label for="language">Voice input language</label>
+          <select id="language" title="Sets the speech recognition language. Command parsing is English-only.">
+            <option value="en-US">English (US)</option>
+            <option value="hi-IN">Hindi (India)</option>
+            <option value="te-IN">Telugu (India)</option>
+            <option value="ta-IN">Tamil (India)</option>
+          </select>
+        </div>
+      </header>
 
     <main class="app-main">
       <section class="voice-section" aria-label="Voice input">

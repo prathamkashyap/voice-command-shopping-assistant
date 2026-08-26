@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "npx serve public -l 3000",
+    "dev:functions": "firebase emulators:start --only functions,hosting",
     "build": "echo 'No build step required'",
     "deploy": "firebase deploy",
-    "test": "node --test test/**/*.test.js"
+    "test": "node --test test/**/*.test.js",
+    "test:integration": "FUNCTIONS_EMULATOR_URL=http://localhost:5001/voice-shopping-assistant-app/us-central1 node --test test/llm-integration.test.js"
   },
   "keywords": ["voice", "shopping", "assistant", "speech-recognition"],
   "license": "MIT",

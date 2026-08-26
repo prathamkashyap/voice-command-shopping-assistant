@@ -72,10 +72,16 @@ export class UI {
     `;
 
     div.querySelector('.icon-btn.delete').addEventListener('click', () => {
+      const deletedItem = { ...item };
       this.app.shoppingList.remove(item.id);
       this.renderShoppingList();
       this.app.updateSuggestions();
-      this.showToast(`Removed ${item.name}`, 'success');
+      this.showToast(`Removed ${item.name}`, 'success', () => {
+        this.app.shoppingList.undo();
+        this.renderShoppingList();
+        this.app.updateSuggestions();
+        this.showToast(`Restored ${deletedItem.name}`, 'info');
+      });
     });
 
     return div;
@@ -116,7 +122,7 @@ export class UI {
 
       div.querySelector('button').addEventListener('click', () => {
         const newItem = {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           name: suggestion.product.name,
           category: suggestion.product.category,
           quantity: 1,
@@ -166,7 +172,7 @@ export class UI {
 
       div.querySelector('button').addEventListener('click', () => {
         const newItem = {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           name: product.name,
           category: product.category,
           quantity: 1,
@@ -226,7 +232,7 @@ export class UI {
     }
   }
 
-  showToast(message, type = 'info') {
+  showToast(message, type = 'info', undoCallback = null) {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     
@@ -240,7 +246,16 @@ export class UI {
     toast.innerHTML = `
       ${icons[type] || icons.info}
       <span class="toast-message">${this.escapeHtml(message)}</span>
+      ${undoCallback ? '<button class="toast-undo" aria-label="Undo">Undo</button>' : ''}
     `;
+
+    if (undoCallback) {
+      toast.querySelector('.toast-undo').addEventListener('click', () => {
+        undoCallback();
+        toast.style.animation = 'toastIn 0.3s ease reverse';
+        setTimeout(() => toast.remove(), 300);
+      });
+    }
 
     this.toastContainer.appendChild(toast);
 
@@ -254,5 +269,22 @@ export class UI {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  setSyncStatus(status) {
+    const syncStatusEl = document.getElementById('syncStatus');
+    const syncLabel = syncStatusEl?.querySelector('.sync-label');
+    if (!syncStatusEl) return;
+    
+    syncStatusEl.dataset.status = status;
+    if (syncLabel) {
+      const labels = {
+        synced: 'Synced',
+        syncing: 'Syncing…',
+        offline: 'Offline',
+        error: 'Sync Error'
+      };
+      syncLabel.textContent = labels[status] || 'Unknown';
+    }
   }
 }

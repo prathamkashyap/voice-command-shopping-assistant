@@ -1,8 +1,11 @@
 const STORAGE_KEY = 'voice_shopping_list';
+const UNDO_KEY = 'voice_shopping_undo';
 
 export class ShoppingList {
-  constructor() {
+  constructor(syncManager = null) {
     this.items = [];
+    this.lastDeletedItem = null;
+    this.syncManager = syncManager;
   }
 
   load() {
@@ -11,9 +14,14 @@ export class ShoppingList {
       if (stored) {
         this.items = JSON.parse(stored);
       }
+      const undoStored = localStorage.getItem(UNDO_KEY);
+      if (undoStored) {
+        this.lastDeletedItem = JSON.parse(undoStored);
+      }
     } catch (e) {
       console.error('Failed to load shopping list:', e);
       this.items = [];
+      this.lastDeletedItem = null;
     }
   }
 
@@ -23,6 +31,43 @@ export class ShoppingList {
     } catch (e) {
       console.error('Failed to save shopping list:', e);
     }
+    this.syncToFirestore();
+  }
+
+  saveUndo() {
+    try {
+      if (this.lastDeletedItem) {
+        localStorage.setItem(UNDO_KEY, JSON.stringify(this.lastDeletedItem));
+      } else {
+        localStorage.removeItem(UNDO_KEY);
+      }
+    } catch (e) {
+      console.error('Failed to save undo state:', e);
+    }
+  }
+
+  async syncToFirestore(deletedItemIds = []) {
+    if (this.syncManager && this.syncManager.isEnabled()) {
+      try {
+        await this.syncManager.syncItems(this.items, deletedItemIds);
+      } catch (e) {
+        console.warn('Firestore sync failed:', e);
+      }
+    }
+  }
+
+  // Generate a client-side timestamp for local mutations
+  // This is used for LWW conflict resolution before server timestamps resolve
+  _now() {
+    return Date.now();
+  }
+
+  // Ensure item has a client-side updatedAt timestamp
+  _ensureUpdatedAt(item) {
+    if (!item.updatedAt) {
+      item.updatedAt = this._now();
+    }
+    return item;
   }
 
   add(item) {
@@ -33,7 +78,9 @@ export class ShoppingList {
     
     if (existing) {
       existing.quantity += item.quantity;
+      existing.updatedAt = this._now();
     } else {
+      this._ensureUpdatedAt(item);
       this.items.push(item);
     }
     
@@ -41,13 +88,67 @@ export class ShoppingList {
   }
 
   remove(id) {
-    this.items = this.items.filter(i => i.id !== id);
+    const index = this.items.findIndex(i => i.id === id);
+    if (index !== -1) {
+      // Store the deleted item for undo with a fresh timestamp
+      const deletedItem = { ...this.items[index], deletedAt: this._now() };
+      this.lastDeletedItem = deletedItem;
+      // Remove from local array (UI disappears immediately)
+      this.items = this.items.filter(i => i.id !== id);
+      this.save();
+      this.saveUndo();
+    }
+  }
+
+  // Soft delete: creates a deletion mutation for Firestore without
+  // affecting the local items array (which is already filtered by remove())
+  // This is called by syncItems when syncing to Firestore
+  getDeletionMutations() {
+    // This method is not directly used; syncItems handles deletion via
+    // the items array passed to it. For deleted items, we need to track them.
+    // The SyncManager will handle deletion by receiving items with deleted: true
+    return [];
+  }
+
+  undo() {
+    if (!this.lastDeletedItem) {
+      return false;
+    }
+    
+    // Check if an item with the same name+unit already exists (e.g., re-added)
+    const existing = this.items.find(i => 
+      i.name.toLowerCase() === this.lastDeletedItem.name.toLowerCase() && 
+      i.unit === this.lastDeletedItem.unit
+    );
+    
+    if (existing) {
+      existing.quantity += this.lastDeletedItem.quantity;
+      existing.updatedAt = this._now();
+    } else {
+      // Restore the item (without deletedAt) with a fresh timestamp
+      const { deletedAt, ...itemToRestore } = this.lastDeletedItem;
+      itemToRestore.updatedAt = this._now();
+      this.items.push(itemToRestore);
+    }
+    
     this.save();
+    this.lastDeletedItem = null;
+    this.saveUndo();
+    return true;
+  }
+
+  canUndo() {
+    return this.lastDeletedItem !== null;
   }
 
   update(item) {
     const index = this.items.findIndex(i => i.id === item.id);
     if (index !== -1) {
+      // Always update the timestamp when the item is modified
+      // unless the caller explicitly passes preserveTimestamp: true
+      if (!item.preserveTimestamp) {
+        item.updatedAt = this._now();
+      }
       this.items[index] = item;
       this.save();
     }
@@ -77,8 +178,12 @@ export class ShoppingList {
   }
 
   clear() {
+    // Capture all current item IDs for proper deletion sync
+    const itemIdsToDelete = this.items.map(item => item.id);
     this.items = [];
-    this.save();
+    this.save(itemIdsToDelete);
+    // Return the IDs so the sync manager can create deletion mutations
+    return itemIdsToDelete;
   }
 
   getAll() {

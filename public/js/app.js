@@ -1,16 +1,24 @@
 import { ShoppingList } from './shopping-list.js';
 import { VoiceRecognition } from './voice-recognition.js';
-import { CommandParser } from './command-parser.js';
+import { HybridIntentParser } from './hybrid-parser.js';
 import { ProductCatalog } from './product-catalog.js';
 import { RecommendationEngine } from './recommendation-engine.js';
 import { UI } from './ui.js';
+import { syncManager } from './sync-manager.js';
+import { errorTracker, captureException, captureMessage } from './error-tracker.js';
 
 class App {
   constructor() {
-    this.shoppingList = new ShoppingList();
+    this.syncManager = syncManager;
+    this.shoppingList = new ShoppingList(this.syncManager);
     this.productCatalog = new ProductCatalog();
     this.recommendationEngine = new RecommendationEngine(this.shoppingList, this.productCatalog);
-    this.commandParser = new CommandParser(this.productCatalog);
+    this.intentParser = new HybridIntentParser(this.productCatalog, {
+      useMockLLM: false,
+      llmEnabled: true,
+      fallbackToLLM: true,
+      apiEndpoint: '/api/parse-intent'
+    });
     this.ui = new UI(this);
     this.voiceRecognition = new VoiceRecognition({
       onStart: () => this.ui.setListeningState(true),
@@ -24,7 +32,30 @@ class App {
       }
     });
     
+    // Initialize error tracking
+    this.initErrorTracking();
+    
     this.init();
+  }
+
+  initErrorTracking() {
+    // Initialize error tracker
+    errorTracker.setUserId(this.syncManager.getUserId() || 'anonymous');
+    
+    // Override console.error to capture errors
+    const originalError = console.error;
+    console.error = (...args) => {
+      originalError.apply(console, args);
+      const error = args.find(arg => arg instanceof Error);
+      if (error) {
+        captureException(error, { source: 'console.error' });
+      }
+    };
+    
+    // Capture unhandled promise rejections globally
+    window.addEventListener('unhandledrejection', (event) => {
+      captureException(event.reason, { type: 'unhandled_rejection' });
+    });
   }
 
   async init() {
@@ -38,6 +69,57 @@ class App {
     this.ui.render();
     this.setupEventListeners();
     this.updateSuggestions();
+    
+    this.initializeSync();
+  }
+
+  async initializeSync() {
+    try {
+      await this.syncManager.init();
+      if (this.syncManager.isEnabled()) {
+        // Set user ID in error tracker after auth
+        errorTracker.setUserId(this.syncManager.getUserId());
+        await this.syncManager.initialSync(this.shoppingList);
+      }
+      
+      // Register sync status callback
+      this.syncManager.onSyncStatusChange((status) => {
+        this.ui.setSyncStatus(status);
+      });
+    } catch (error) {
+      captureException(error, { source: 'initializeSync' });
+      console.warn('Sync initialization failed:', error.message);
+    }
+    
+    // Register service worker
+    this.registerServiceWorker();
+  }
+
+  async registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      try {
+        const registration = await navigator.serviceWorker.register('/sw.js');
+        console.log('[App] Service Worker registered:', registration.scope);
+        
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              this.ui.showToast('New version available! Refresh to update.', 'info');
+            }
+          });
+        });
+        
+        // Listen for messages from service worker
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data && event.data.type === 'SYNC_COMPLETE') {
+            this.ui.showToast('Sync completed', 'success');
+          }
+        });
+      } catch (error) {
+        console.warn('[App] Service Worker registration failed:', error);
+      }
+    }
   }
 
   handleVoiceResult(transcript) {
@@ -80,17 +162,55 @@ class App {
     this.ui.setStatus('processing');
 
     try {
-      const parsed = this.commandParser.parse(text);
-      await this.executeCommand(parsed);
+      const locale = document.getElementById('language')?.value || 'en-US';
+      const intent = await this.intentParser.parse(text, locale);
+      await this.executeIntent(intent);
       this.ui.setStatus('success');
     } catch (error) {
+      captureException(error, { 
+        source: 'processCommand', 
+        command: text 
+      });
       this.ui.setStatus('error');
       this.ui.showToast(error.message, 'error');
     }
   }
 
-  async executeCommand(parsed) {
-    switch (parsed.action) {
+  async executeIntent(intent) {
+    switch (intent.action) {
+      case 'add':
+      case 'remove':
+      case 'modify':
+        for (const item of intent.items) {
+          await this.executeSingleItemCommand(intent.action, item);
+        }
+        break;
+      case 'multi':
+        for (const item of intent.items) {
+          await this.executeSingleItemCommand('add', item);
+        }
+        break;
+      case 'search':
+        await this.searchProducts(intent.searchFilters);
+        break;
+      default:
+        throw new Error(`Unknown action: ${intent.action}`);
+    }
+
+    if (intent.action !== 'search') {
+      this.ui.renderShoppingList();
+    }
+  }
+
+  async executeSingleItemCommand(action, itemData) {
+    const parsed = {
+      action,
+      item: itemData.item,
+      quantity: itemData.quantity,
+      unit: itemData.unit
+    };
+
+    switch (action) {
       case 'add':
         await this.addItem(parsed);
         break;
@@ -100,22 +220,13 @@ class App {
       case 'modify':
         await this.modifyItem(parsed);
         break;
-      case 'search':
-        await this.searchProducts(parsed);
-        break;
-      default:
-        throw new Error(`Unknown command: ${parsed.action}`);
-    }
-
-    if (parsed.action === 'add' || parsed.action === 'remove' || parsed.action === 'modify') {
-      this.ui.renderShoppingList();
     }
   }
 
   async addItem(parsed) {
     const product = this.productCatalog.findBestMatch(parsed.item);
     const item = {
-      id: Date.now(),
+      id: crypto.randomUUID(),
       name: product?.name || parsed.item,
       category: product?.category || 'Other',
       quantity: parsed.quantity || 1,
@@ -158,16 +269,16 @@ class App {
     this.updateSuggestions();
   }
 
-  async searchProducts(parsed) {
+  async searchProducts(searchFilters) {
     const results = this.productCatalog.search({
-      query: parsed.item,
-      brand: parsed.brand,
-      maxPrice: parsed.maxPrice,
-      category: parsed.category,
-      isOrganic: parsed.isOrganic
+      query: searchFilters.query,
+      brand: searchFilters.brand,
+      maxPrice: searchFilters.maxPrice,
+      category: searchFilters.category,
+      isOrganic: searchFilters.isOrganic
     });
     
-    this.ui.showSearchResults(results, parsed);
+    this.ui.showSearchResults(results, searchFilters);
   }
 
   updateSuggestions() {
