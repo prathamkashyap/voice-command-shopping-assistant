@@ -1,6 +1,6 @@
 # 🛒 Voice Command Shopping Assistant
 
-A production-ready, voice-controlled shopping list app that works **completely offline**, syncs across devices via Firebase, and understands natural language commands like *"add 2 kg milk and 3 apples"*.
+A production-ready, voice-controlled shopping list app that works **offline-first**, syncs across devices via Firebase, and understands natural language commands like *"add 2 kg milk and 3 apples"*.
 
 **Live Demo:** https://voice-shopping-assistant-app.web.app
 
@@ -33,9 +33,9 @@ A production-ready, voice-controlled shopping list app that works **completely o
 - **Installable on iOS/Android** — home screen icon, full-screen
 - **Auto-updates** — notifies when new version is ready
 
-### 🛡️ Privacy-First & Free Forever
+### 🛡️ Privacy-First
 - **Anonymous auth** — no email, no password, no tracking
-- **Runs on Firebase Free Tier (Spark)** — $0/month forever
+- **Runs on Firebase Free Tier (Spark)** — $0/month on current free tier
 - **Your data stays yours** — stored in your Firebase project
 - **Zero paid APIs** — no OpenAI/Anthropic keys needed
 
@@ -154,19 +154,21 @@ voice-shopping-assistant/
 | **Data Access** | Firestore rules: users only see their own data |
 | **Data Storage** | Your Firebase project (you own it) |
 | **Network** | HTTPS only, CSP headers, no third-party scripts |
-| **Offline Data** | Encrypted in browser localStorage |
+| **Offline Data** | Stored in browser localStorage (not encrypted) |
 
 ---
 
-## 💰 Cost Breakdown (Forever Free)
+## 💰 Cost Breakdown
 
-| Service | Firebase Tier | Monthly Cost |
-|---------|---------------|--------------|
+| Service | Firebase Tier | Monthly Cost (Current Free Tier) |
+|---------|---------------|----------------------------------|
 | Authentication | Spark (Free) | $0 |
 | Firestore (1 GiB, 50K reads/day) | Spark (Free) | $0 |
 | Hosting (10 GB, 360 MB/day) | Spark (Free) | $0 |
 | Functions (125K invocations) | Spark (Free) | $0 |
-| **Total** | | **$0/month** |
+| **Total** | | **$0/month on current free tier** |
+
+> ⚠️ Firebase pricing may change. Check [Firebase pricing](https://firebase.google.com/pricing) for current limits.
 
 ---
 
