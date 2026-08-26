@@ -131,7 +131,6 @@ voice-shopping-assistant/
 │   │   ├── product-catalog.js # Product data
 │   │   ├── recommendation-engine.js # Smart suggestions
 │   │   ├── voice-recognition.js # Web Speech API
-│   │   ├── hybrid-parser.js # LLM + rules
 │   │   ├── intent-schema.js # Type definitions
 │   │   ├── rule-based-parser.js # Rule parser wrapper
 │   │   └── llm-parser.js # LLM integration
@@ -206,7 +205,6 @@ voice-shopping-assistant/
 │   │   ├── product-catalog.js # Product data
 │   │   ├── recommendation-engine.js # Smart suggestions
 │   │   ├── voice-recognition.js # Web Speech API
-│   │   ├── hybrid-parser.js # LLM + rules
 │   │   ├── intent-schema.js # Type definitions
 │   │   ├── rule-based-parser.js # Rule parser wrapper
 │   │   └── llm-parser.js # LLM integration
