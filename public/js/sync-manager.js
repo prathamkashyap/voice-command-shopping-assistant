@@ -1,5 +1,3 @@
-const STORAGE_KEY = 'voice_shopping_list';
-const UNDO_KEY = 'voice_shopping_undo';
 const SYNC_STATE_KEY = 'voice_shopping_sync';
 const OFFLINE_QUEUE_KEY = 'voice_shopping_offline_queue';
 
@@ -51,7 +49,9 @@ function getTimestampMillis(value) {
 }
 
 export class SyncManager {
-  constructor() {
+  constructor({ loadFirestore = importFirestore, loadAuth = importAuth } = {}) {
+    this.loadFirestore = loadFirestore;
+    this.loadAuth = loadAuth;
     this.auth = null;
     this.db = null;
     this.userId = null;
@@ -60,9 +60,12 @@ export class SyncManager {
     this.lastSyncTime = null;
     
     // Real-time sync
-    this.unsubscribeSnapshot = null;
+    this.listener = null;
+    this.listenerFailed = false;
+    this.session = null;
     this.isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.syncStatusCallbacks = [];
+    this.syncStatus = this.isOnline ? 'local-only' : 'offline';
     
     // Offline queue
     this.offlineQueue = [];
@@ -74,58 +77,99 @@ export class SyncManager {
       this.shoppingList = shoppingList;
     }
 
+    this.disconnect();
+    const session = new AbortController();
+    this.session = session;
+
     try {
       this.auth = window.firebaseAuth;
       this.db = window.firebaseDb;
-
+      this.isOnline = navigator.onLine !== false;
       if (!this.auth || !this.db) {
-        console.warn('Firebase not available, sync disabled');
-        this.enabled = false;
+        this._notifySyncStatus(this.isOnline ? 'local-only' : 'offline');
         return false;
       }
 
-      await this.signInAnonymously();
+      await this.signInAnonymously(session);
+      if (session.signal.aborted) return false;
       this.enabled = true;
-      
-      // Load offline queue from localStorage
       this.loadOfflineQueue();
-      
-      // Set up online/offline listeners
-      this.setupOnlineOfflineListeners();
-      
-      // Start real-time listener
-      await this.startRealtimeListener();
-      
-      // Flush any pending offline queue
+      this.setupOnlineOfflineListeners(session.signal);
+
+      if (this.isOnline) {
+        this._notifySyncStatus('syncing');
+        const attached = await this.startRealtimeListener();
+        if (!attached && this.isOnline && !session.signal.aborted) {
+          this.disconnect();
+          this._notifySyncStatus('error');
+          return false;
+        }
+      } else {
+        this._notifySyncStatus('offline');
+      }
+      if (session.signal.aborted) return false;
       this.flushOfflineQueue();
-      
       return true;
     } catch (error) {
-      console.warn('Firebase initialization failed, sync disabled:', error.message);
-      this.enabled = false;
+      if (!session.signal.aborted) {
+        console.warn('Firebase initialization failed:', error.message);
+        this.disconnect();
+        this._notifySyncStatus('error');
+      }
       return false;
     }
   }
 
-  async signInAnonymously() {
-    const { signInAnonymously, onAuthStateChanged } = await importAuth();
+  async signInAnonymously(session) {
+    const { signInAnonymously, onAuthStateChanged } = await this.loadAuth();
+    const { signal } = session;
+    if (signal.aborted) throw new Error('Sync session closed');
 
     return new Promise((resolve, reject) => {
-      const unsubscribe = onAuthStateChanged(this.auth, async (user) => {
-        if (user) {
-          this.userId = user.uid;
-          unsubscribe();
-          resolve(user);
+      const timer = setTimeout(() => reject(new Error('Auth timeout')), 10000);
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new Error('Sync session closed'));
+      }, { once: true });
+
+      let signingIn = false;
+      const onError = error => {
+        clearTimeout(timer);
+        if (signal.aborted) return;
+        this.disconnect();
+        this._notifySyncStatus('error');
+        reject(error);
+      };
+      const unsubscribe = onAuthStateChanged(this.auth, user => {
+        if (signal.aborted) return;
+        // The legacy list and outbox have no owner field. Stop on identity
+        // changes instead of delivering the previous user's records.
+        if (this.userId && user?.uid !== this.userId) {
+          onError(new Error('Sync identity changed'));
+          return;
         }
-      });
-
-      signInAnonymously(this.auth).catch(reject);
-
-      setTimeout(() => {
-        unsubscribe();
-        reject(new Error('Auth timeout'));
-      }, 10000);
+        if (user) {
+          clearTimeout(timer);
+          this.userId = user.uid;
+          resolve(user);
+        } else if (!signingIn) {
+          signingIn = true;
+          signInAnonymously(this.auth).catch(onError);
+        }
+      }, onError);
+      if (signal.aborted) unsubscribe();
+      else signal.addEventListener('abort', unsubscribe, { once: true });
     });
+  }
+
+  disconnect() {
+    this.session?.abort();
+    this.session = null;
+    this.stopRealtimeListener();
+    this.enabled = false;
+    this.userId = null;
+    this.listenerFailed = false;
+    this._notifySyncStatus(this.isOnline ? 'local-only' : 'offline');
   }
 
   getUserId() {
@@ -167,10 +211,14 @@ export class SyncManager {
 
     if (this.syncInProgress) return false;
     this.syncInProgress = true;
+    const session = this.session;
+    const userId = this.userId;
+    const current = () => this.enabled && this.session === session && this.userId === userId;
     this._notifySyncStatus('syncing');
 
     try {
-      const { collection, doc, writeBatch, serverTimestamp } = await importFirestore();
+      const { collection, doc, writeBatch, serverTimestamp } = await this.loadFirestore();
+      if (!current()) return false;
 
       // Use collection reference for shoppingList: users/{userId}/shoppingList (3 segments = valid collection)
       const itemsRef = collection(this.db, 'users', this.userId, 'shoppingList');
@@ -212,11 +260,13 @@ export class SyncManager {
       }
 
       await batch.commit();
+      if (!current()) return false;
       this.lastSyncTime = Date.now();
       this.saveSyncState();
       this._notifySyncStatus(this.isOnline ? 'synced' : 'offline');
       return true;
     } catch (error) {
+      if (!current()) return false;
       console.warn('Firestore sync failed:', error.message);
       this._notifySyncStatus('error');
       return false;
@@ -228,11 +278,13 @@ export class SyncManager {
   async fetchRemoteItems() {
     if (!this.enabled || !this.userId) return [];
 
+    const db = this.db;
+    const userId = this.userId;
     try {
-      const { collection, doc, getDocs, query, where } = await importFirestore();
+      const { collection, getDocs, query } = await this.loadFirestore();
 
       // Use collection reference for shoppingList: users/{userId}/shoppingList (3 segments = valid collection)
-      const itemsRef = collection(this.db, 'users', this.userId, 'shoppingList');
+      const itemsRef = collection(db, 'users', userId, 'shoppingList');
       // Fetch ALL items (including deleted) to prevent resurrection of deleted items
       const q = query(itemsRef);
       const snapshot = await getDocs(q);
@@ -329,7 +381,10 @@ export class SyncManager {
     this.shoppingList = shoppingList;
 
     try {
+      const session = this.session;
+      const userId = this.userId;
       const remoteItems = await this.fetchRemoteItems();
+      if (!this.enabled || this.session !== session || this.userId !== userId) return false;
       if (remoteItems.length === 0) {
         await this.syncItems(shoppingList.items);
         return true;
@@ -380,7 +435,7 @@ export class SyncManager {
   onSyncStatusChange(callback) {
     this.syncStatusCallbacks.push(callback);
     // Immediately notify with current status
-    callback(this.isOnline ? 'synced' : 'offline');
+    callback(this.syncStatus);
     return () => {
       const idx = this.syncStatusCallbacks.indexOf(callback);
       if (idx > -1) this.syncStatusCallbacks.splice(idx, 1);
@@ -391,22 +446,25 @@ export class SyncManager {
    * Notify all registered callbacks of sync status change
    */
   _notifySyncStatus(status) {
-    this.syncStatusCallbacks.forEach(cb => cb(status));
+    this.syncStatus = this.listenerFailed && (status === 'syncing' || status === 'synced')
+      ? 'error'
+      : status;
+    this.syncStatusCallbacks.forEach(cb => cb(this.syncStatus));
   }
 
   /**
    * Set up online/offline event listeners
    */
-  setupOnlineOfflineListeners() {
-    window.addEventListener('online', () => this.handleOnline());
-    window.addEventListener('offline', () => this.handleOffline());
+  setupOnlineOfflineListeners(signal) {
+    window.addEventListener('online', () => this.handleOnline(), { signal });
+    window.addEventListener('offline', () => this.handleOffline(), { signal });
   }
 
   handleOnline() {
     if (this.isOnline) return; // Already online
     this.isOnline = true;
     console.log('[SyncManager] Online - flushing offline queue');
-    this._notifySyncStatus('synced');
+    this._notifySyncStatus('syncing');
     this.flushOfflineQueue();
     // Re-start real-time listener if it was stopped
     this.startRealtimeListener();
@@ -423,47 +481,64 @@ export class SyncManager {
   /**
    * Start real-time Firestore listener for remote changes
    */
-  async startRealtimeListener() {
-    if (!this.enabled || !this.userId || this.unsubscribeSnapshot) return;
+  startRealtimeListener() {
+    if (!this.enabled || !this.db || !this.userId || !this.isOnline) return Promise.resolve(false);
+    if (this.listener?.uid === this.userId && this.listener.db === this.db) {
+      return this.listener.ready;
+    }
+    this.stopRealtimeListener();
+    const listener = { uid: this.userId, db: this.db, unsubscribe: null };
+    this.listener = listener;
+    listener.ready = this.attachRealtimeListener(listener);
+    return listener.ready;
+  }
 
+  async attachRealtimeListener(listener) {
+    const current = () => this.listener === listener && this.userId === listener.uid &&
+      this.db === listener.db && this.enabled && this.isOnline;
+    const onError = error => {
+      if (!current()) return;
+      console.warn('Real-time listener error:', error.message);
+      this.stopRealtimeListener();
+      this.listenerFailed = true;
+      this._notifySyncStatus('error');
+    };
     try {
-      const itemsRef = collection(this.db, 'users', this.userId, 'shoppingList');
-      
-      // Listen for real-time changes
-      this.unsubscribeSnapshot = onSnapshot(itemsRef, (snapshot) => {
-        if (!this.enabled) return;
-        
+      const { collection, onSnapshot } = await this.loadFirestore();
+      if (!current()) return false;
+      const itemsRef = collection(listener.db, 'users', listener.uid, 'shoppingList');
+      const unsubscribe = onSnapshot(itemsRef, snapshot => {
+        if (!current()) return;
         const remoteItems = [];
         snapshot.forEach(doc => {
           const data = doc.data();
-          const updatedAtMillis = getTimestampMillis(data.updatedAt);
-          remoteItems.push({
-            id: doc.id,
-            ...data,
-            _updatedAtMillis: updatedAtMillis,
-            updatedAt: updatedAtMillis !== null ? updatedAtMillis : Date.now()
-          });
+          const millis = getTimestampMillis(data.updatedAt);
+          remoteItems.push({ ...data, id: doc.id, _updatedAtMillis: millis, updatedAt: millis ?? Date.now() });
         });
-
-        // Merge remote changes with local
         this.handleRemoteChanges(remoteItems);
-      }, (error) => {
-        console.warn('Real-time listener error:', error.message);
-        this._notifySyncStatus('error');
-      });
-
-      console.log('[SyncManager] Real-time listener started');
+        if (!snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites &&
+            !this.syncInProgress && !this.offlineQueue.length) {
+          this.listenerFailed = false;
+          this._notifySyncStatus('synced');
+        }
+      }, onError);
+      if (!current()) {
+        unsubscribe();
+        return false;
+      }
+      listener.unsubscribe = unsubscribe;
+      this.listenerFailed = false;
+      return true;
     } catch (error) {
-      console.warn('Failed to start real-time listener:', error.message);
+      onError(error);
+      return false;
     }
   }
 
   stopRealtimeListener() {
-    if (this.unsubscribeSnapshot) {
-      this.unsubscribeSnapshot();
-      this.unsubscribeSnapshot = null;
-      console.log('[SyncManager] Real-time listener stopped');
-    }
+    const listener = this.listener;
+    this.listener = null;
+    listener?.unsubscribe?.();
   }
 
   /**
@@ -486,7 +561,7 @@ export class SyncManager {
       }
 
       // Notify UI of changes (if app has a reference)
-      if (window.app && window.app.ui) {
+      if (globalThis.window?.app?.ui) {
         window.app.ui.renderShoppingList();
         window.app.updateSuggestions();
       }

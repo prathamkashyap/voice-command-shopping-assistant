@@ -298,19 +298,126 @@ describe('SyncManager', () => {
     });
   });
 
-  describe('getTimestampMillis / isServerTimestampSentinel', () => {
-    it('should detect server timestamp sentinel', () => {
-      const sm = new SyncManager();
-      // We can't easily test the internal function, but we can test the behavior
-      // through mergeItems which uses it
-      const sentinel = { _methodName: 'FieldValue.serverTimestamp' };
-      // The function is not exported, so we test behavior indirectly
-      assert.ok(true); // Placeholder - behavior tested via mergeItems
+  describe('Firestore listener lifecycle', () => {
+    function harness(load) {
+      const subscriptions = [];
+      const sdk = {
+        collection: (db, ...path) => ({ db, path }),
+        onSnapshot(ref, next, error) {
+          const entry = { ref, next, error, stops: 0 };
+          subscriptions.push(entry);
+          return () => { entry.stops++; };
+        }
+      };
+      const sm = new SyncManager({ loadFirestore: load ? () => load(sdk) : async () => sdk });
+      sm.db = {};
+      sm.userId = 'shopper';
+      sm.enabled = sm.isOnline = true;
+      sm.shoppingList = { items: [], saves: 0, saveLocal() { this.saves++; } };
+      return { sm, subscriptions };
+    }
+
+    function snapshot(...documents) {
+      return {
+        metadata: { fromCache: false, hasPendingWrites: false },
+        forEach(visit) { documents.forEach(([id, fields]) => visit({ id, data: () => fields })); }
+      };
+    }
+
+    it('shares one attachment, merges server timestamps, and ignores callbacks after stop', async () => {
+      const { sm, subscriptions } = harness();
+      const results = await Promise.all([sm.startRealtimeListener(), sm.startRealtimeListener()]);
+      assert.deepEqual(results, [true, true]);
+      assert.equal(subscriptions.length, 1);
+      const sub = subscriptions[0];
+      assert.deepEqual(sub.ref, { db: sm.db, path: ['users', 'shopper', 'shoppingList'] });
+      sub.next(snapshot(['milk', { name: 'Milk', quantity: 1, updatedAt: { toMillis: () => 1234 } }]));
+      assert.equal(sm.shoppingList.items[0].updatedAt, 1234);
+      assert.equal(sm.shoppingList.saves, 1);
+      sm.stopRealtimeListener();
+      sm.stopRealtimeListener();
+      sub.next(snapshot(['late', { updatedAt: 2000 }]));
+      assert.equal(sub.stops, 1);
+      assert.equal(sm.shoppingList.saves, 1);
     });
 
-    it('should convert Firestore Timestamp to millis', () => {
-      // Test through mergeItems behavior
-      assert.ok(true);
+    it('keeps a reliable local edit over an unresolved server timestamp', async () => {
+      const { sm, subscriptions } = harness();
+      sm.shoppingList.items = [{ id: 'milk', quantity: 3, updatedAt: 1200 }];
+      await sm.startRealtimeListener();
+      const sub = subscriptions[0];
+      sub.next(snapshot(['milk', { quantity: 2, updatedAt: { _methodName: 'serverTimestamp' } }]));
+      assert.equal(sm.shoppingList.items[0].quantity, 3);
+      sub.next(snapshot(['milk', { quantity: 4, updatedAt: { toMillis: () => 1201 } }]));
+      assert.equal(sm.shoppingList.items[0].quantity, 4);
+    });
+
+    it('cancels an attachment awaiting the SDK when stopped and restarted', async () => {
+      let resume;
+      let loads = 0;
+      const { sm, subscriptions } = harness(sdk => {
+        if (++loads === 1) return new Promise(resolve => { resume = () => resolve(sdk); });
+        return sdk;
+      });
+      const oldStart = sm.startRealtimeListener();
+      sm.stopRealtimeListener();
+      sm.userId = 'replacement';
+      const newStart = sm.startRealtimeListener();
+      resume();
+      assert.deepEqual(await Promise.all([oldStart, newStart]), [false, true]);
+      assert.equal(subscriptions.length, 1);
+      assert.deepEqual(subscriptions[0].ref.path, ['users', 'replacement', 'shoppingList']);
+    });
+
+    it('publishes load and listener failures to late observers and permits a fresh subscription', async () => {
+      let attempts = 0;
+      const { sm, subscriptions } = harness(sdk => {
+        if (++attempts === 1) throw new Error('SDK unavailable');
+        return sdk;
+      });
+      assert.equal(await sm.startRealtimeListener(), false);
+      const statuses = [];
+      sm.onSyncStatusChange(status => statuses.push(status));
+      assert.deepEqual(statuses, ['error']);
+      assert.equal(await sm.startRealtimeListener(), true);
+      subscriptions[0].error(new Error('Permission denied'));
+      subscriptions[0].next(snapshot(['stale', { updatedAt: 1 }]));
+      assert.equal(subscriptions[0].stops, 1);
+      assert.equal(sm.shoppingList.saves, 0);
+      assert.equal(statuses.at(-1), 'error');
+      assert.equal(await sm.startRealtimeListener(), true);
+      subscriptions[1].next(snapshot(['bread', { updatedAt: 1000 }]));
+      assert.equal(sm.shoppingList.saves, 1);
+      assert.equal(statuses.at(-1), 'synced');
+    });
+
+    it('stops delivery when authentication changes and unsubscribes on disconnect', async () => {
+      const { sm, subscriptions } = harness();
+      const session = new AbortController();
+      let authChanged;
+      let authStops = 0;
+      sm.session = session;
+      sm.userId = null;
+      sm.loadAuth = async () => ({
+        onAuthStateChanged(auth, next) {
+          authChanged = next;
+          queueMicrotask(() => next({ uid: 'shopper' }));
+          return () => { authStops++; };
+        }
+      });
+      await sm.signInAnonymously(session);
+      await sm.startRealtimeListener();
+      authChanged({ uid: 'other' });
+      assert.equal(sm.enabled, false);
+      assert.equal(sm.userId, null);
+      assert.equal(sm.syncStatus, 'error');
+      assert.equal(authStops, 1);
+      const sub = subscriptions[0];
+      sub.next(snapshot(['stale', { updatedAt: 1 }]));
+      assert.equal(sm.shoppingList.saves, 0);
+      sm.disconnect();
+      assert.equal(sub.stops, 1);
+      assert.equal(authStops, 1);
     });
   });
 });
