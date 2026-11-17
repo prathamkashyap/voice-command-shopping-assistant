@@ -1,5 +1,5 @@
 import { CommandParser } from './command-parser.js';
-import { createIntent, normalizeLegacyParsed } from './intent-schema.js';
+import { createIntent } from './intent-schema.js';
 
 export class RuleBasedIntentParser {
   constructor(productCatalog) {
@@ -7,7 +7,6 @@ export class RuleBasedIntentParser {
   }
 
   parse(text) {
-    const parsed = this.parser.parse(text);
-    return normalizeLegacyParsed(parsed, 'rule');
+    return createIntent({ ...this.parser.parseIntent(text), source: 'rule', confidence: 0.9 });
   }
 }

@@ -6,7 +6,8 @@ import {
   IntentSchema 
 } from '../public/js/intent-schema.js';
 import { RuleBasedIntentParser } from '../public/js/rule-based-parser.js';
-import { MockLLMIntentParser } from '../public/js/llm-parser.js';
+import { readFileSync } from 'node:fs';
+import { LLMIntentParser } from '../public/js/llm-parser.js';
 import { HybridIntentParser } from '../public/js/hybrid-parser.js';
 
 const mockCatalog = {
@@ -232,115 +233,81 @@ describe('RuleBasedIntentParser', () => {
   });
 });
 
-describe('MockLLMIntentParser', () => {
-  let parser;
+describe('HybridIntentParser', () => {
+  const cases = [
+    ['add candy and bread', [['add', 'candy', 1, null], ['add', 'bread', 1, null]]],
+    ['add milk, bread', [['add', 'milk', 1, null], ['add', 'bread', 1, null]]],
+    ['buy apples, bananas, and bread', [['add', 'apples', 1, null], ['add', 'bananas', 1, null], ['add', 'bread', 1, null]]],
+    ['add 2 apples and 3 bananas', [['add', 'apples', 2, null], ['add', 'bananas', 3, null]]],
+    ['get milk and 2 bottles of water', [['add', 'milk', 1, null], ['add', 'water', 2, 'bottles']]],
+    ['add milk and remove bread', [['add', 'milk', 1, null], ['remove', 'bread', 1, null]]]
+  ];
 
-  before(() => {
-    parser = new MockLLMIntentParser();
+  for (const [command, expected] of cases) {
+    it(`parses "${command}" locally with remote parsing disabled`, async () => {
+      const parser = new HybridIntentParser(mockCatalog, { llmEnabled: false });
+      const intent = await parser.parse(command);
+      assert.equal(intent.source, 'rule');
+      assert.equal(intent.action, 'multi');
+      assert.deepEqual(intent.operations.map(({ action, item, quantity, unit }) => [action, item, quantity, unit]), expected);
+    });
+  }
+
+  it('does not let an action word inside an item choose the verb', async () => {
+    const parser = new HybridIntentParser(mockCatalog);
+    const intent = await parser.parse('add drop biscuits');
+    assert.equal(intent.action, 'add');
+    assert.equal(intent.items[0].item, 'drop biscuits');
   });
 
-  it('should parse multi-item add command', async () => {
-    const intent = await parser.parse('add milk and bread');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 2);
-    assert.equal(intent.items[0].item, 'milk');
-    assert.equal(intent.items[1].item, 'bread');
+  it('supports multiword brand and filter-only searches', async () => {
+    const parser = new HybridIntentParser(mockCatalog);
+    const brand = await parser.parse('find rice by India Gate');
+    assert.equal(brand.searchFilters.brand, 'india gate');
+    assert.equal(brand.searchFilters.query, 'rice');
+    const filter = await parser.parse('find organic under $5');
+    assert.deepEqual(filter.searchFilters, { query: '', maxPrice: 5, brand: null, isOrganic: true, category: null });
+    assert.equal((await parser.parse('find rice $5 or less')).searchFilters.maxPrice, 5);
+  });
+
+  it('clarifies ambiguous or invalid recognized commands without forwarding', async t => {
+    const parser = new HybridIntentParser(mockCatalog);
+    const fetch = t.mock.method(globalThis, 'fetch', () => {});
+    for (const command of ['do not remove milk', 'add milk then remove bread', 'add -2 apples', 'add 0 apples', 'remove 2 apples']) {
+      await assert.rejects(parser.parse(command));
+    }
+    assert.equal(fetch.mock.callCount(), 0);
+  });
+
+  it('only forwards an unrecognized command when both flags allow it', async t => {
+    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({
+      intent: { action: 'search', searchFilters: { query: 'milk' } }
+    }));
+    for (const options of [{ llmEnabled: false }, { fallbackToLLM: false }, { useMockLLM: true }]) {
+      await assert.rejects(new HybridIntentParser(mockCatalog, options).parse('shopping ideas'));
+    }
+    await new HybridIntentParser(mockCatalog).parse('add milk and bread');
+    assert.equal(fetch.mock.callCount(), 0);
+    const intent = await new HybridIntentParser(mockCatalog).parse('shopping ideas');
+    assert.equal(fetch.mock.callCount(), 1);
     assert.equal(intent.source, 'llm');
   });
 
-  it('should parse comma-separated items', async () => {
-    const intent = await parser.parse('add milk, bread, and apples');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 3);
-  });
-
-  it('should throw for single item commands', async () => {
-    await assert.rejects(
-      parser.parse('add milk'),
-      /Mock LLM could not parse/
-    );
+  it('ships the same deterministic parser in the Functions package', () => {
+    const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+    assert.equal(read('../public/js/command-parser.js'), read('../functions/command-parser.mjs'));
   });
 });
 
-describe('HybridIntentParser', () => {
-  let parser;
-
-  before(() => {
-    parser = new HybridIntentParser(mockCatalog, {
-      useMockLLM: true,
-      llmEnabled: true,
-      fallbackToLLM: true
-    });
-  });
-
-  it('should use rule-based parser for simple commands', async () => {
-    const intent = await parser.parse('add milk');
-    assert.equal(intent.action, 'add');
-    assert.equal(intent.items[0].item, 'milk');
-    assert.equal(intent.source, 'rule');
-  });
-
-  it('should use LLM fallback for multi-item commands', async () => {
-    const intent = await parser.parse('add milk and bread');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 2);
-    assert.equal(intent.source, 'hybrid');
-  });
-
-  it('should use LLM fallback for comma-separated items', async () => {
-    const intent = await parser.parse('add milk, bread, and apples');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 3);
-  });
-
-  it('should handle rule-based parser errors with LLM fallback', async () => {
-    const intent = await parser.parse('add milk and bread');
-    assert.equal(intent.action, 'multi');
-  });
-
-  it('should return rule-based result when LLM disabled', async () => {
-    parser.setLLMEnabled(false);
-    const intent = await parser.parse('add milk and bread');
-    // When LLM disabled, falls back to rule-based which parses as single item
-    assert.equal(intent.action, 'add');
-    assert.equal(intent.source, 'rule');
-  });
-});
-
-describe('Multi-item command support', () => {
-  let parser;
-
-  before(() => {
-    parser = new HybridIntentParser(mockCatalog, {
-      useMockLLM: true,
-      llmEnabled: true
-    });
-  });
-
-  it('should handle "add milk and bread"', async () => {
-    const intent = await parser.parse('add milk and bread');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 2);
-    const itemNames = intent.items.map(i => i.item).sort();
-    assert.deepEqual(itemNames, ['bread', 'milk']);
-  });
-
-  it('should handle "buy apples, bananas, and bread"', async () => {
-    const intent = await parser.parse('buy apples, bananas, and bread');
-    assert.equal(intent.action, 'multi');
-    // "apples", "bananas", "bread" = 3 items
-    assert.equal(intent.items.length, 3);
-  });
-
-  it('should handle "get milk and 2 bottles of water"', async () => {
-    const intent = await parser.parse('get milk and 2 bottles of water');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 2);
-  });
-
-  it('should handle "I need milk and bread"', async () => {
-    const intent = await parser.parse('I need milk and bread');
-    assert.equal(intent.action, 'multi');
-    assert.equal(intent.items.length, 2);
+describe('LLMIntentParser transport', () => {
+  it('keeps the request deadline active while waiting for the response body', async t => {
+    t.mock.method(globalThis, 'fetch', async (_url, { signal }) => ({
+      ok: true,
+      json: () => new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        setTimeout(() => resolve({ action: 'add', items: [{ item: 'milk' }] }), 80).unref();
+      })
+    }));
+    await assert.rejects(new LLMIntentParser({ timeout: 10 }).parse('shopping ideas'), { name: 'AbortError' });
   });
 });

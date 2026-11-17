@@ -62,21 +62,78 @@ const PRICE_PATTERNS = [
   /max(?:imum)?\s*(?:price\s*)?\$?(\d+(?:\.\d+)?)/i
 ];
 
-const BRAND_PATTERNS = [
-  /\b(?:brand|by)\s+([a-zA-Z]+)/i
-];
+const BRAND_PATTERN = /\b(?:brand|by)\s+(.+)$/i;
 
 const ORGANIC_PATTERN = /\b(organic|bio)\b/i;
+
+// Only a wholly unrecognized request may be forwarded to the optional endpoint.
+// Invalid, incomplete, or ambiguous local commands must request clarification.
+export class UnrecognizedCommandError extends Error {}
+
+const COMMAND_START = /^(?:(?:please|kindly)\s+)?(?:i need|i want|i would like|we need|we want|add|buy|get|put|need|want|grab|pick up|remove|delete|take|drop|change|update|modify|set|find|search|look for|show me)\b/i;
+const AMBIGUOUS = /\b(?:no|not|never|don['’]t|without|except|unless|instead|then|if|or)\b/i;
+const POLITE_PREFIX = /^(?:please|kindly)\s+/i;
+const REQUEST_PREFIX = /^(?:i|we)\s+(?:need|want|would like)\s+to\s+/i;
 
 export class CommandParser {
   constructor(productCatalog) {
     this.productCatalog = productCatalog;
   }
 
-  parse(text) {
+  parseIntent(text) {
+    if (typeof text !== 'string' || !text.trim() || text.length > 1000) {
+      throw new Error('Enter a shopping command of up to 1,000 characters.');
+    }
+    if (AMBIGUOUS.test(text.replace(/\bor less\b/gi, 'maximum'))) {
+      throw new Error('Please clarify the command or submit each action separately.');
+    }
+    const clauses = text.trim().split(/,\s*and\b|,|\band\b/i).map(part => part.trim());
+    if (clauses.length > 32 || clauses.some(part => !part)) {
+      throw new Error('Please specify an item for each action and limit the command to 32 items.');
+    }
+    if (!COMMAND_START.test(clauses[0])) {
+      if (this.detectAction(text)) throw new Error('Please start the command with the intended action.');
+      throw new UnrecognizedCommandError("I didn't understand that command. Try 'Add milk'.");
+    }
+    const operations = [];
+    let action;
+    for (const clause of clauses) {
+      const bare = clause.replace(POLITE_PREFIX, '');
+      const request = bare.replace(REQUEST_PREFIX, '');
+      const explicit = COMMAND_START.test(request) ? request : bare;
+      const command = COMMAND_START.test(explicit) ? explicit : `${action} ${clause}`;
+      if (/(?:^|\s)-\s*\d/.test(command)) throw new Error('Use a positive quantity or price.');
+      const start = command.match(COMMAND_START)?.[0];
+      const parsed = this.parse(command, this.detectAction(start || ''));
+      action = parsed.action;
+      if (parsed.item && /\s(?:add|remove|delete|modify|change|buy)\s/i.test(parsed.item)) {
+        throw new Error('Please separate each action with a comma or the word "and".');
+      }
+      if (action === 'search') {
+        if (clauses.length !== 1) throw new Error('Please submit a search separately from other items or actions.');
+        return {
+          action, items: [], operations: null, originalText: text,
+          searchFilters: { query: parsed.item || '', maxPrice: parsed.maxPrice, brand: parsed.brand, isOrganic: parsed.isOrganic, category: null }
+        };
+      }
+      if (action === 'modify' && parsed.quantity == null) throw new Error('Specify the new quantity.');
+      if (action === 'remove' && parsed.quantity != null) throw new Error('Please clarify whether to remove the item or change its quantity.');
+      const quantity = parsed.quantity ?? 1;
+      if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1e6) throw new Error('Use a quantity above zero and at most 1,000,000.');
+      if (parsed.item.length > 160) throw new Error('Use an item name of at most 160 characters.');
+      operations.push({ action, item: parsed.item, quantity, unit: parsed.unit ?? null });
+    }
+    const items = operations.map(({ item, quantity, unit }) => ({ item, quantity, unit }));
+    return {
+      action: operations.length === 1 ? action : 'multi',
+      items, operations: operations.length === 1 ? null : operations, searchFilters: null, originalText: text
+    };
+  }
+
+  parse(text, explicitAction) {
     const lowerText = text.toLowerCase().trim();
     
-    const action = this.detectAction(lowerText);
+    const action = explicitAction ?? this.detectAction(lowerText);
     if (!action) {
       throw new Error("I didn't understand that command. Try 'Add milk' or 'Find toothpaste under $5'.");
     }
@@ -135,15 +192,13 @@ export class CommandParser {
 
   parseSearch(text, parsed) {
     parsed.maxPrice = this.extractPrice(text);
-    parsed.brand = this.extractBrand(text);
-    parsed.isOrganic = ORGANIC_PATTERN.test(text);
     
     for (const pattern of PRICE_PATTERNS) {
       text = text.replace(pattern, '').trim();
     }
-    for (const pattern of BRAND_PATTERNS) {
-      text = text.replace(pattern, '').trim();
-    }
+    parsed.brand = text.match(BRAND_PATTERN)?.[1]?.trim() || null;
+    text = text.replace(BRAND_PATTERN, '').trim();
+    parsed.isOrganic = ORGANIC_PATTERN.test(text);
     text = text.replace(ORGANIC_PATTERN, '').trim();
 
     const searchPatterns = ACTION_PATTERNS.search;
@@ -156,7 +211,7 @@ export class CommandParser {
     
     parsed.item = text || null;
     
-    if (!parsed.item) {
+    if (!parsed.item && parsed.maxPrice == null && !parsed.brand && !parsed.isOrganic) {
       throw new Error("Please specify what to search for");
     }
 
@@ -258,16 +313,6 @@ export class CommandParser {
       const match = text.match(pattern);
       if (match) {
         return parseFloat(match[1]);
-      }
-    }
-    return null;
-  }
-
-  extractBrand(text) {
-    for (const pattern of BRAND_PATTERNS) {
-      const match = text.match(pattern);
-      if (match) {
-        return match[1];
       }
     }
     return null;
