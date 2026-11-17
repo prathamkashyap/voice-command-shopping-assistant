@@ -428,6 +428,43 @@ describe('ShoppingList', () => {
 
       const md = testList.exportAsMarkdown();
       assert.ok(md.includes('- [ ] **Milk** (2 L)'));
+
+      const csv = testList.exportAsCSV();
+      assert.ok(csv.includes('Name,Category,Quantity,Unit,Completed,Product ID'));
+      assert.ok(csv.includes('"Milk","Dairy",2,"L",no,'));
+    });
+  });
+
+  describe('clearCompleted() and deletion sync', () => {
+    it('should remove completed items and pass deleted ids to sync', () => {
+      const syncCalls = [];
+      const syncManager = {
+        isEnabled: () => true,
+        syncItems: (items, deletedItemIds = []) => {
+          syncCalls.push({ itemCount: items.length, deletedItemIds });
+          return Promise.resolve(true);
+        }
+      };
+      const testList = new ShoppingList(syncManager);
+      global.localStorage = {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {}
+      };
+
+      testList.items = [
+        { id: 'done', name: 'Milk', category: 'Dairy', quantity: 1, unit: 'L', completed: true },
+        { id: 'todo', name: 'Bread', category: 'Bakery', quantity: 1, unit: 'loaf', completed: false }
+      ];
+
+      const removedIds = testList.clearCompleted();
+
+      assert.deepEqual(removedIds, ['done']);
+      assert.equal(testList.items.length, 1);
+      assert.equal(testList.items[0].id, 'todo');
+      assert.equal(syncCalls.length, 1);
+      assert.deepEqual(syncCalls[0].deletedItemIds, ['done']);
+      assert.equal(syncCalls[0].itemCount, 1);
     });
   });
 });

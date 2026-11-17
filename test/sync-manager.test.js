@@ -188,7 +188,7 @@ describe('SyncManager', () => {
   });
 
   describe('mergeItems - soft delete and LWW edge cases', () => {
-    it('should prefer remote when remote has deleted=true (deletion wins)', () => {
+    it('should keep newer local item when remote delete is older', () => {
       const sm = new SyncManager();
       const localItems = [
         { id: '1', name: 'Milk', quantity: 1, unit: 'L', updatedAt: 3000 }
@@ -200,8 +200,22 @@ describe('SyncManager', () => {
       const merged = sm.mergeItems(localItems, remoteItems);
 
       assert.equal(merged.length, 1);
-      assert.equal(merged[0].deleted, true);
-      assert.equal(merged[0].source, 'remote');
+      assert.equal(merged[0].deleted, undefined);
+      assert.equal(merged[0].source, 'local');
+    });
+
+    it('should remove local item when remote delete is newer', () => {
+      const sm = new SyncManager();
+      const localItems = [
+        { id: '1', name: 'Milk', quantity: 1, unit: 'L', updatedAt: 1000 }
+      ];
+      const remoteItems = [
+        { id: '1', name: 'Milk', quantity: 1, unit: 'L', updatedAt: 3000, deleted: true }
+      ];
+
+      const merged = sm.mergeItems(localItems, remoteItems);
+
+      assert.equal(merged.length, 0);
     });
 
     it('should prefer local when remote timestamp is null (unresolved sentinel)', () => {
@@ -264,9 +278,7 @@ describe('SyncManager', () => {
 
       const merged = sm.mergeItems(localItems, remoteItems);
 
-      assert.equal(merged.length, 1);
-      assert.equal(merged[0].deleted, true);
-      assert.equal(merged[0].source, 'remote');
+      assert.equal(merged.length, 0);
     });
 
     it('should preserve local-only items during merge', () => {

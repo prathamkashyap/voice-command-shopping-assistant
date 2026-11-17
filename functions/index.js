@@ -30,6 +30,9 @@ Return ONLY valid JSON matching this schema:
   "items": [
     { "item": "string", "quantity": number|null, "unit": "string|null" }
   ],
+  "operations": [
+    { "action": "add|remove|modify", "item": "string", "quantity": number|null, "unit": "string|null" }
+  ],
   "searchFilters": {
     "query": "string",
     "maxPrice": number|null,
@@ -39,12 +42,14 @@ Return ONLY valid JSON matching this schema:
   }
 }
 
+For action "multi", include "operations" with the correct action for each item, and keep "items" as the flattened item list.
+
 Examples:
 User: "Add 2 bottles of milk"
 {"action":"add","items":[{"item":"milk","quantity":2,"unit":"bottles"}],"searchFilters":null}
 
 User: "Remove milk and add bread"
-{"action":"multi","items":[{"item":"milk","quantity":1,"unit":null},{"item":"bread","quantity":1,"unit":null}],"searchFilters":null}
+{"action":"multi","items":[{"item":"milk","quantity":1,"unit":null},{"item":"bread","quantity":1,"unit":null}],"operations":[{"action":"remove","item":"milk","quantity":1,"unit":null},{"action":"add","item":"bread","quantity":1,"unit":null}],"searchFilters":null}
 
 User: "Find organic tomatoes under $5"
 {"action":"search","items":[],"searchFilters":{"query":"tomatoes","maxPrice":5,"brand":null,"isOrganic":true,"category":null}}
@@ -95,19 +100,41 @@ function validateIntentSchema(parsed) {
     return;
   }
 
-  if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+  const hasItems = Array.isArray(parsed.items) && parsed.items.length > 0;
+  const hasOperations = Array.isArray(parsed.operations) && parsed.operations.length > 0;
+
+  if (parsed.action === 'multi') {
+    if (!hasItems && !hasOperations) {
+      throw new Error('Multi requires items or operations');
+    }
+  } else if (!hasItems) {
     throw new Error('Non-search actions require at least one item');
   }
 
-  for (const item of parsed.items) {
+  const validateItemShape = (item, label) => {
     if (!item.item || typeof item.item !== 'string') {
-      throw new Error('Each item must have a string item name');
+      throw new Error(`Each ${label} must have a string item name`);
     }
     if (item.quantity !== null && item.quantity !== undefined && typeof item.quantity !== 'number') {
-      throw new Error('Item quantity must be a number or null');
+      throw new Error(`${label} quantity must be a number or null`);
     }
     if (item.unit !== null && item.unit !== undefined && typeof item.unit !== 'string') {
-      throw new Error('Item unit must be a string or null');
+      throw new Error(`${label} unit must be a string or null`);
+    }
+  };
+
+  if (hasItems) {
+    for (const item of parsed.items) {
+      validateItemShape(item, 'item');
+    }
+  }
+
+  if (hasOperations) {
+    for (const operation of parsed.operations) {
+      if (!operation.action || !['add', 'remove', 'modify'].includes(operation.action)) {
+        throw new Error('Each operation must have action add, remove, or modify');
+      }
+      validateItemShape(operation, 'operation');
     }
   }
 }
@@ -219,6 +246,7 @@ function mockParseIntent(text) {
         return {
           action: 'multi',
           items,
+          operations: items.map(item => ({ action: 'add', ...item })),
           searchFilters: null
         };
       }
@@ -377,5 +405,38 @@ exports.parseIntent = onRequest(
 
       return res.status(500).json({ error: 'UNAVAILABLE', message: 'LLM service temporarily unavailable' });
     }
+  }
+);
+
+exports.logErrors = onRequest(
+  {
+    cors: true,
+    maxInstances: 5,
+    timeoutSeconds: 5,
+    invoker: 'public'
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Use POST' });
+    }
+
+    const errors = Array.isArray(req.body?.errors) ? req.body.errors.slice(0, 50) : [];
+    if (errors.length === 0) {
+      return res.status(400).json({ error: 'INVALID_REQUEST', message: 'Missing errors array' });
+    }
+
+    logger.warn({
+      event: 'client_errors_received',
+      count: errors.length,
+      sessionId: typeof req.body?.sessionId === 'string' ? req.body.sessionId : null,
+      userId: typeof req.body?.userId === 'string' ? req.body.userId : null,
+      errors: errors.map(error => ({
+        message: String(error?.message || error || '').slice(0, 500),
+        name: error?.name ? String(error.name).slice(0, 100) : null,
+        timestamp: error?.timestamp || null
+      }))
+    });
+
+    return res.status(204).end();
   }
 );

@@ -107,9 +107,20 @@ export class LLMIntentParser {
 
     const items = Array.isArray(parsed.items) ? parsed.items : 
       (parsed.item ? [{ item: parsed.item, quantity: parsed.quantity ?? 1, unit: parsed.unit ?? null }] : []);
+    const operations = Array.isArray(parsed.operations) ? parsed.operations : null;
 
-    if (items.length === 0 && parsed.action !== 'search') {
+    if (items.length === 0 && (!operations || operations.length === 0)) {
       throw new Error('No items found in LLM response');
+    }
+
+    if (parsed.action === 'multi' && operations && operations.length > 0) {
+      return createIntent({
+        action: 'multi',
+        operations,
+        originalText,
+        source: 'llm',
+        confidence: parsed.confidence ?? 0.7
+      });
     }
 
     const normalizedItems = items.map(item => ({

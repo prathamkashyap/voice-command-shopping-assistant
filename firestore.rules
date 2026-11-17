@@ -1,18 +1,14 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users can only access their own shopping list data
-    match /users/{userId}/shoppingList/items/{itemId} {
+    // Shopping list item documents live at users/{uid}/shoppingList/{itemId}.
+    // This also covers the optional shoppingList/meta document.
+    match /users/{userId}/shoppingList/{itemId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    
+
     // Users can only access their own history
     match /users/{userId}/history/{historyId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Users can only access their own meta
-    match /users/{userId}/shoppingList/meta {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }

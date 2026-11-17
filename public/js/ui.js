@@ -1,3 +1,5 @@
+import { icon } from './icons.js';
+
 export class UI {
   constructor(app) {
     this.app = app;
@@ -23,6 +25,18 @@ export class UI {
 
     this._statusResetTimer = null;
     this.initTheme();
+    this.initModalDismissal();
+  }
+
+  initModalDismissal() {
+    document.querySelectorAll('.modal-backdrop').forEach(modal => {
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+          modal.classList.remove('open');
+          modal.setAttribute('aria-hidden', 'true');
+        }
+      });
+    });
   }
 
   initTheme() {
@@ -38,11 +52,9 @@ export class UI {
     if (themeBtn) {
       themeBtn.setAttribute('title', theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode');
       themeBtn.setAttribute('aria-label', theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode');
-      const icon = themeBtn.querySelector('.theme-icon');
-      if (icon) {
-        icon.innerHTML = theme === 'dark' 
-          ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
-          : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+      const themeIcon = themeBtn.querySelector('.theme-icon');
+      if (themeIcon) {
+        themeIcon.innerHTML = theme === 'dark' ? icon('sun') : icon('moon');
       }
     }
   }
@@ -152,6 +164,12 @@ export class UI {
       const percentage = totalItems > 0 ? (completedCount / totalItems) * 100 : 0;
       this.completedProgressEl.style.width = `${percentage}%`;
     }
+
+    const clearCompletedBtn = document.getElementById('clearCompleted');
+    if (clearCompletedBtn) {
+      clearCompletedBtn.disabled = completedCount === 0;
+      clearCompletedBtn.textContent = completedCount > 0 ? `Clear done (${completedCount})` : 'Clear done';
+    }
   }
 
   createListItemElement(item) {
@@ -182,16 +200,14 @@ export class UI {
       </div>
 
       <div class="item-qty-stepper">
-        <button class="qty-btn dec" aria-label="Decrease quantity" title="Decrease">−</button>
+        <button class="qty-btn dec" aria-label="Decrease quantity" title="Decrease">${icon('minus', 'ui-icon--sm')}</button>
         <span class="item-qty">${item.quantity}<span class="item-unit">${this.escapeHtml(item.unit)}</span></span>
-        <button class="qty-btn inc" aria-label="Increase quantity" title="Increase">+</button>
+        <button class="qty-btn inc" aria-label="Increase quantity" title="Increase">${icon('plus', 'ui-icon--sm')}</button>
       </div>
 
       <div class="item-actions">
         <button class="icon-btn delete" aria-label="Remove ${this.escapeHtml(item.name)}" title="Remove">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
+          ${icon('trash', 'ui-icon--sm')}
         </button>
       </div>
     `;
@@ -259,7 +275,7 @@ export class UI {
         </div>
         <div class="suggestion-side">
           <span class="suggestion-price">$${suggestion.product.price}</span>
-          <button class="btn btn-primary btn-sm">Add</button>
+          <button class="btn btn-primary btn-sm">${icon('plus', 'ui-icon--sm')}<span>Add</span></button>
         </div>
       `;
 
@@ -313,7 +329,7 @@ export class UI {
         </div>
         <div class="suggestion-side">
           <span class="product-price">$${product.price}</span>
-          <button class="btn btn-primary btn-sm">Add</button>
+          <button class="btn btn-primary btn-sm">${icon('plus', 'ui-icon--sm')}<span>Add</span></button>
         </div>
       `;
 
@@ -433,12 +449,12 @@ export class UI {
     }
   }
 
-  toggleInspector() {
+  toggleInspector(isOpen) {
     const panel = document.getElementById('diagnosticsPanel');
     if (!panel) return;
-    const isVisible = panel.classList.contains('open');
-    panel.classList.toggle('open', !isVisible);
-    panel.setAttribute('aria-hidden', String(isVisible));
+    const shouldOpen = typeof isOpen === 'boolean' ? isOpen : !panel.classList.contains('open');
+    panel.classList.toggle('open', shouldOpen);
+    panel.setAttribute('aria-hidden', String(!shouldOpen));
   }
 
   toggleArchModal(isOpen) {
@@ -470,10 +486,10 @@ export class UI {
     toast.className = `toast ${type}`;
     
     const icons = {
-      success: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
-      error: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
-      warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-      info: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'
+      success: icon('check'),
+      error: icon('close'),
+      warning: icon('warning'),
+      info: icon('info')
     };
 
     toast.innerHTML = `
@@ -509,16 +525,22 @@ export class UI {
     const syncStatusEl = document.getElementById('syncStatus');
     const syncLabel = syncStatusEl?.querySelector('.sync-label');
     if (!syncStatusEl) return;
-    
+
+    const pendingCount = this.app.syncManager?.getPendingOperationCount?.() || 0;
     syncStatusEl.dataset.status = status;
     if (syncLabel) {
       const labels = {
-        synced: 'Synced',
+        synced: pendingCount > 0 ? `Syncing ${pendingCount}` : 'Synced',
         syncing: 'Syncing…',
-        offline: 'Offline',
+        offline: pendingCount > 0 ? `Offline • ${pendingCount}` : 'Offline',
         error: 'Sync Error'
       };
       syncLabel.textContent = labels[status] || 'Unknown';
     }
+    syncStatusEl.title = status === 'offline'
+      ? 'Offline — changes are queued locally'
+      : status === 'error'
+        ? 'Sync encountered an error'
+        : 'Firestore real-time sync status';
   }
 }

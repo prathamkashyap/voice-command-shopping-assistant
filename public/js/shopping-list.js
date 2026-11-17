@@ -12,7 +12,7 @@ export class ShoppingList {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        this.items = JSON.parse(stored);
+        this.items = JSON.parse(stored).filter(item => item && !item.deleted);
       }
       const undoStored = localStorage.getItem(UNDO_KEY);
       if (undoStored) {
@@ -25,13 +25,17 @@ export class ShoppingList {
     }
   }
 
-  save() {
+  saveLocal() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.items));
     } catch (e) {
       console.error('Failed to save shopping list:', e);
     }
-    this.syncToFirestore();
+  }
+
+  save(deletedItemIds = []) {
+    this.saveLocal();
+    this.syncToFirestore(deletedItemIds);
   }
 
   saveUndo() {
@@ -95,7 +99,7 @@ export class ShoppingList {
       this.lastDeletedItem = deletedItem;
       // Remove from local array (UI disappears immediately)
       this.items = this.items.filter(i => i.id !== id);
-      this.save();
+      this.save([id]);
       this.saveUndo();
     }
   }
@@ -182,8 +186,18 @@ export class ShoppingList {
     const itemIdsToDelete = this.items.map(item => item.id);
     this.items = [];
     this.save(itemIdsToDelete);
-    // Return the IDs so the sync manager can create deletion mutations
+    // Return the IDs so callers can report or test the deletion scope
     return itemIdsToDelete;
+  }
+
+  clearCompleted() {
+    const completedIds = this.items.filter(item => item.completed).map(item => item.id);
+    if (completedIds.length === 0) return [];
+
+    const ids = new Set(completedIds);
+    this.items = this.items.filter(item => !ids.has(item.id));
+    this.save(completedIds);
+    return completedIds;
   }
 
   toggleCompleted(id) {
@@ -227,17 +241,34 @@ export class ShoppingList {
     return Number(total.toFixed(2));
   }
 
+  exportAsCSV() {
+    if (this.items.length === 0) return '';
+    const escape = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const rows = [['Name', 'Category', 'Quantity', 'Unit', 'Completed', 'Product ID'].join(',')];
+    for (const item of this.getAll()) {
+      rows.push([
+        escape(item.name),
+        escape(item.category),
+        item.quantity ?? '',
+        escape(item.unit),
+        item.completed ? 'yes' : 'no',
+        item.productId ?? ''
+      ].join(','));
+    }
+    return rows.join('\n');
+  }
+
   exportAsText() {
     if (this.items.length === 0) return 'Shopping list is empty.';
     const dateStr = new Date().toLocaleDateString();
-    let text = `🛒 Shopping List (${dateStr})\n`;
+    let text = `Shopping List (${dateStr})\n`;
     text += `Total items: ${this.items.length}\n\n`;
 
     const grouped = this.groupedByCategory;
     for (const [category, items] of Object.entries(grouped)) {
       text += `[${category.toUpperCase()}]\n`;
       for (const item of items) {
-        const mark = item.completed ? '✓ ' : '• ';
+        const mark = item.completed ? '[x] ' : '- ';
         const unit = item.unit ? ` ${item.unit}` : '';
         text += `${mark}${item.name} - ${item.quantity}${unit}\n`;
       }
@@ -249,7 +280,7 @@ export class ShoppingList {
   exportAsMarkdown() {
     if (this.items.length === 0) return '_Shopping list is empty._';
     const dateStr = new Date().toLocaleDateString();
-    let md = `### 🛒 Shopping List - ${dateStr}\n\n`;
+    let md = `### Shopping List - ${dateStr}\n\n`;
 
     const grouped = this.groupedByCategory;
     for (const [category, items] of Object.entries(grouped)) {
@@ -265,7 +296,7 @@ export class ShoppingList {
   }
 
   getAll() {
-    return [...this.items].sort((a, b) => {
+    return this.items.filter(item => !item.deleted).sort((a, b) => {
       // Uncompleted items first, then by category, then by name
       if (Boolean(a.completed) !== Boolean(b.completed)) {
         return a.completed ? 1 : -1;

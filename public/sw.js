@@ -1,9 +1,10 @@
-const CACHE_NAME = 'shopping-assistant-v2';
+const CACHE_NAME = 'shopping-assistant-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/css/styles.css',
   '/js/app.js',
+  '/js/error-tracker.js',
   '/js/shopping-list.js',
   '/js/product-catalog.js',
   '/js/recommendation-engine.js',

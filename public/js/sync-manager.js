@@ -69,7 +69,11 @@ export class SyncManager {
     this.queueFlushInProgress = false;
   }
 
-  async init() {
+  async init(shoppingList = null) {
+    if (shoppingList) {
+      this.shoppingList = shoppingList;
+    }
+
     try {
       this.auth = window.firebaseAuth;
       this.db = window.firebaseDb;
@@ -132,6 +136,10 @@ export class SyncManager {
     return this.enabled;
   }
 
+  getPendingOperationCount() {
+    return this.offlineQueue.length;
+  }
+
   async syncItems(localItems, deletedItemIds = []) {
     if (!this.enabled || !this.userId) return false;
 
@@ -159,6 +167,7 @@ export class SyncManager {
 
     if (this.syncInProgress) return false;
     this.syncInProgress = true;
+    this._notifySyncStatus('syncing');
 
     try {
       const { collection, doc, writeBatch, serverTimestamp } = await importFirestore();
@@ -205,9 +214,11 @@ export class SyncManager {
       await batch.commit();
       this.lastSyncTime = Date.now();
       this.saveSyncState();
+      this._notifySyncStatus(this.isOnline ? 'synced' : 'offline');
       return true;
     } catch (error) {
       console.warn('Firestore sync failed:', error.message);
+      this._notifySyncStatus('error');
       return false;
     } finally {
       this.syncInProgress = false;
@@ -257,74 +268,56 @@ export class SyncManager {
    * - Local items not in remote are preserved (new local additions)
    */
   mergeItems(localItems, remoteItems) {
-    /**
-     * Extract a reliable timestamp from an item for LWW comparison.
-     * Returns null if timestamp is unreliable (missing, null sentinel, or zero).
-     * Priority:
-     * 1. _updatedAtMillis (set by fetchRemoteItems for resolved timestamps) if > 0
-     * 2. If _updatedAtMillis is explicitly null -> unresolved sentinel -> unreliable
-     * 3. If _updatedAtMillis not present, check updatedAt (client-side timestamp) if > 0
-     * 4. Otherwise null (unreliable)
-     */
     function getReliableTime(item) {
-      // _updatedAtMillis is set by fetchRemoteItems for resolved timestamps
-      // If explicitly null, it means unresolved server timestamp sentinel
       if (item._updatedAtMillis !== undefined && item._updatedAtMillis !== null) {
         return item._updatedAtMillis > 0 ? item._updatedAtMillis : null;
       }
-      // If _updatedAtMillis is explicitly null, it means unresolved sentinel
       if (item._updatedAtMillis === null) {
         return null;
       }
-      // _updatedAtMillis not present - check if we have a client-side updatedAt
       if (item.updatedAt !== undefined && typeof item.updatedAt === 'number' && item.updatedAt > 0) {
         return item.updatedAt;
       }
-      return null; // No reliable timestamp
+      return null;
+    }
+
+    function cleanItem(item, source) {
+      const { _updatedAtMillis, ...rest } = item;
+      return { ...rest, source };
     }
 
     const merged = new Map();
 
-    // First, add all local items
     for (const item of localItems) {
-      merged.set(item.id, { ...item, source: 'local' });
+      if (!item.deleted) {
+        merged.set(item.id, cleanItem(item, 'local'));
+      }
     }
 
-    // Then merge remote items
     for (const remote of remoteItems) {
       const local = merged.get(remote.id);
       const remoteDeleted = remote.deleted === true;
-      
+      const localTime = getReliableTime(local || {});
+      const remoteTime = getReliableTime(remote);
+      const localReliable = localTime !== null && localTime > 0;
+      const remoteReliable = remoteTime !== null && remoteTime > 0;
+
+      if (remoteDeleted) {
+        const localWins = Boolean(local) && localReliable && remoteReliable && localTime > remoteTime;
+        if (!localWins) {
+          merged.delete(remote.id);
+        }
+        continue;
+      }
+
       if (!local) {
-        // Remote item not in local - add it (could be new remote or deleted item we don't know about)
-        merged.set(remote.id, { ...remote, source: 'remote' });
-      } else {
-        // Both exist - apply LWW with proper timestamp handling
-        const localTime = getReliableTime(local);
-        const remoteTime = getReliableTime(remote);
-        
-        // Determine if timestamps are reliable (not null and > 0)
-        const localTimeReliable = localTime !== null && localTime > 0;
-        const remoteTimeReliable = remoteTime !== null && remoteTime > 0;
-        
-        let useRemote = false;
-        
-        if (remote.deleted === true) {
-          // If remote says deleted, prefer remote (deletion wins)
-          useRemote = true;
-        } else if (!localTimeReliable && remoteTimeReliable) {
-          // Local has no reliable timestamp, remote does
-          useRemote = true;
-        } else if (localTimeReliable && remoteTimeReliable) {
-          // Both reliable - standard LWW
-          useRemote = remoteTime > localTime;
-        }
-        // If neither reliable, keep local (local-first)
-        
-        if (useRemote) {
-          merged.set(remote.id, { ...remote, source: 'remote' });
-        }
-        // else keep local
+        merged.set(remote.id, cleanItem(remote, 'remote'));
+        continue;
+      }
+
+      const remoteWins = remoteReliable && (!localReliable || remoteTime >= localTime);
+      if (remoteWins) {
+        merged.set(remote.id, cleanItem(remote, 'remote'));
       }
     }
 
@@ -333,25 +326,24 @@ export class SyncManager {
 
   async initialSync(shoppingList) {
     if (!this.enabled) return false;
+    this.shoppingList = shoppingList;
 
     try {
       const remoteItems = await this.fetchRemoteItems();
       if (remoteItems.length === 0) {
-        // Remote is empty - upload local items
         await this.syncItems(shoppingList.items);
         return true;
       }
 
-      // Merge local and remote
       const merged = this.mergeItems(shoppingList.items, remoteItems);
       shoppingList.items = merged;
-      shoppingList.save();
+      shoppingList.saveLocal();
 
-      // Push merged state to Firestore
       await this.syncItems(merged);
       return true;
     } catch (error) {
       console.warn('Initial sync failed:', error.message);
+      this._notifySyncStatus('error');
       return false;
     }
   }
@@ -490,7 +482,7 @@ export class SyncManager {
       // Update local state
       if (this.shoppingList) {
         this.shoppingList.items = merged;
-        this.shoppingList.save();
+        this.shoppingList.saveLocal();
       }
 
       // Notify UI of changes (if app has a reference)

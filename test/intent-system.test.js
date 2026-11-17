@@ -87,6 +87,24 @@ describe('Intent Schema', () => {
       
       assert.equal(intent.action, 'multi');
       assert.equal(intent.items.length, 2);
+      assert.deepEqual(intent.operations.map(op => op.action), ['add', 'add']);
+    });
+
+    it('should preserve per-item actions for mixed multi intents', () => {
+      const intent = createIntent({
+        action: 'multi',
+        operations: [
+          { action: 'remove', item: 'milk', quantity: 1, unit: null },
+          { action: 'add', item: 'bread', quantity: 2, unit: 'loaves' }
+        ],
+        originalText: 'Remove milk and add 2 loaves of bread',
+        source: 'llm',
+        confidence: 0.9
+      });
+
+      assert.equal(intent.action, 'multi');
+      assert.deepEqual(intent.operations.map(op => op.action), ['remove', 'add']);
+      assert.equal(intent.items.length, 2);
     });
 
     it('should throw error for add intent with no items', () => {
