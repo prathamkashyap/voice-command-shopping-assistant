@@ -5,16 +5,18 @@ import { ProductCatalog } from './product-catalog.js';
 import { RecommendationEngine } from './recommendation-engine.js';
 import { UI } from './ui.js';
 import { syncManager } from './sync-manager.js';
-import { errorTracker, captureException, captureMessage } from './error-tracker.js';
+import { getRuntimeMode, initializeFirebase } from './firebase-bootstrap.js';
 
 class App {
   constructor() {
+    this.runtimeMode = getRuntimeMode();
+    this.errorTracker = null;
     this.syncManager = syncManager;
     this.shoppingList = new ShoppingList(this.syncManager);
     this.productCatalog = new ProductCatalog();
     this.recommendationEngine = new RecommendationEngine(this.shoppingList, this.productCatalog);
     this.intentParser = new HybridIntentParser(this.productCatalog, {
-      useMockLLM: false,
+      useMockLLM: this.runtimeMode !== 'cloud',
       llmEnabled: true,
       fallbackToLLM: true,
       apiEndpoint: '/api/parse-intent'
@@ -45,12 +47,12 @@ class App {
       }
     });
     
-    // Initialize error tracking
-    this.initErrorTracking();
     this.init();
   }
 
-  initErrorTracking() {
+  async initErrorTracking() {
+    const { errorTracker } = await import('./error-tracker.js');
+    this.errorTracker = errorTracker;
     errorTracker.setUserId(this.syncManager.getUserId() || 'anonymous');
     
     const originalError = console.error;
@@ -58,7 +60,7 @@ class App {
       originalError.apply(console, args);
       const error = args.find(arg => arg instanceof Error);
       if (error) {
-        captureException(error, { source: 'console.error' });
+        this.errorTracker.captureException(error, { source: 'console.error' });
       }
     };
   }
@@ -73,17 +75,32 @@ class App {
     this.shoppingList.load();
     this.ui.render();
     this.setupEventListeners();
-    this.updateSuggestions();
+    this.ui.updateTTSToggleUI(this.ttsEnabled);
+    if (new URLSearchParams(window.location.search).get('action') === 'add') {
+      document.getElementById('textCommand')?.focus();
+    }
+    this.registerServiceWorker();
+    if (this.runtimeMode === 'cloud') {
+      this.initErrorTracking().catch(error => console.warn('Diagnostics unavailable:', error.message));
+    }
     this.initializeSync();
   }
 
   async initializeSync() {
+    if (this.runtimeMode === 'local') {
+      this.ui.setSyncStatus('local-only');
+      return;
+    }
+    this.ui.setSyncStatus('connecting');
     try {
+      await initializeFirebase(this.runtimeMode);
       await this.syncManager.init(this.shoppingList);
-      if (this.syncManager.isEnabled()) {
-        errorTracker.setUserId(this.syncManager.getUserId());
-        await this.syncManager.initialSync(this.shoppingList);
+      if (!this.syncManager.isEnabled()) {
+        this.ui.setSyncStatus('local-only');
+        return;
       }
+      this.errorTracker?.setUserId(this.syncManager.getUserId());
+      await this.syncManager.initialSync(this.shoppingList);
       
       let previousSyncStatus = null;
       this.syncManager.onSyncStatusChange((status) => {
@@ -97,11 +114,10 @@ class App {
         previousSyncStatus = status;
       });
     } catch (error) {
-      captureException(error, { source: 'initializeSync' });
+      this.ui.setSyncStatus('local-only');
+      this.errorTracker?.captureException(error, { source: 'initializeSync' });
       console.warn('Sync initialization failed:', error.message);
     }
-    
-    this.registerServiceWorker();
   }
 
   async registerServiceWorker() {
@@ -193,6 +209,12 @@ class App {
     document.getElementById('archModalToggle')?.addEventListener('click', () => this.ui.toggleArchModal(true));
     // Export Modal toggle
     document.getElementById('exportListBtn')?.addEventListener('click', () => this.ui.toggleExportModal(true));
+    document.getElementById('closeInspector')?.addEventListener('click', () => this.ui.toggleInspector(false));
+    document.getElementById('closeArchModal')?.addEventListener('click', () => this.ui.toggleArchModal(false));
+    document.getElementById('closeExportModal')?.addEventListener('click', () => this.ui.toggleExportModal(false));
+    document.getElementById('copyTextBtn')?.addEventListener('click', () => this.copyList('text'));
+    document.getElementById('copyMarkdownBtn')?.addEventListener('click', () => this.copyList('markdown'));
+    document.getElementById('shareListBtn')?.addEventListener('click', () => this.shareList());
     document.getElementById('copyCsvBtn')?.addEventListener('click', () => this.copyCSV());
     document.getElementById('downloadCsvBtn')?.addEventListener('click', () => this.downloadCSV());
     
@@ -272,7 +294,7 @@ class App {
       await this.executeIntent(intent);
       this.ui.setStatus('success');
     } catch (error) {
-      captureException(error, { 
+      this.errorTracker?.captureException(error, {
         source: 'processCommand', 
         commandLength: text.length
       });
@@ -473,6 +495,28 @@ class App {
   updateSuggestions() {
     const suggestions = this.recommendationEngine.getSuggestions();
     this.ui.renderSuggestions(suggestions);
+  }
+
+  async copyList(format) {
+    const markdown = format === 'markdown';
+    const text = markdown ? this.shoppingList.exportAsMarkdown() : this.shoppingList.exportAsText();
+    try {
+      await navigator.clipboard.writeText(text);
+      this.ui.showToast(markdown ? 'Copied Markdown!' : 'Copied to clipboard!', 'success');
+    } catch {
+      this.ui.showToast('Clipboard unavailable. Select the preview text to copy it.', 'warning');
+    }
+  }
+
+  async shareList() {
+    if (!navigator.share) return this.copyList('text');
+    try {
+      await navigator.share({ title: 'My Shopping List', text: this.shoppingList.exportAsText() });
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        this.ui.showToast('Sharing unavailable. Copy the list instead.', 'warning');
+      }
+    }
   }
 
   async copyCSV() {

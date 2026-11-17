@@ -101,7 +101,7 @@ export class UI {
     }
 
     if (totalCount === 0) {
-      if (this.emptyStateEl) this.emptyStateEl.style.display = 'flex';
+      if (this.emptyStateEl) this.emptyStateEl.hidden = false;
       this.shoppingListEl.innerHTML = '';
       if (this.emptyStateEl) this.shoppingListEl.appendChild(this.emptyStateEl);
       this.updateCartSummary();
@@ -119,7 +119,7 @@ export class UI {
       return;
     }
 
-    if (this.emptyStateEl) this.emptyStateEl.style.display = 'none';
+    if (this.emptyStateEl) this.emptyStateEl.hidden = true;
     this.shoppingListEl.innerHTML = '';
 
     // Group items by category
@@ -248,11 +248,11 @@ export class UI {
     if (!this.suggestionsSectionEl || !this.suggestionsListEl) return;
     
     if (suggestions.length === 0) {
-      this.suggestionsSectionEl.style.display = 'none';
+      this.suggestionsSectionEl.hidden = true;
       return;
     }
 
-    this.suggestionsSectionEl.style.display = 'block';
+    this.suggestionsSectionEl.hidden = false;
     this.suggestionsListEl.innerHTML = '';
 
     for (const suggestion of suggestions) {
@@ -304,7 +304,7 @@ export class UI {
   showSearchResults(results, filters) {
     if (!this.searchResultsSectionEl || !this.searchResultsEl) return;
     
-    this.searchResultsSectionEl.style.display = 'block';
+    this.searchResultsSectionEl.hidden = false;
     this.searchResultsEl.innerHTML = '';
 
     if (results.length === 0) {
@@ -360,7 +360,7 @@ export class UI {
 
   hideSearchResults() {
     if (this.searchResultsSectionEl) {
-      this.searchResultsSectionEl.style.display = 'none';
+      this.searchResultsSectionEl.hidden = true;
     }
   }
 
@@ -530,6 +530,8 @@ export class UI {
     syncStatusEl.dataset.status = status;
     if (syncLabel) {
       const labels = {
+        'local-only': 'Local only',
+        connecting: 'Connecting…',
         synced: pendingCount > 0 ? `Syncing ${pendingCount}` : 'Synced',
         syncing: 'Syncing…',
         offline: pendingCount > 0 ? `Offline • ${pendingCount}` : 'Offline',
@@ -537,10 +539,12 @@ export class UI {
       };
       syncLabel.textContent = labels[status] || 'Unknown';
     }
-    syncStatusEl.title = status === 'offline'
-      ? 'Offline — changes are queued locally'
-      : status === 'error'
-        ? 'Sync encountered an error'
-        : 'Firestore real-time sync status';
+    const descriptions = {
+      'local-only': 'Shopping list is stored on this device',
+      connecting: 'Connecting to cloud sync',
+      offline: 'Offline — changes are queued locally',
+      error: 'Sync encountered an error'
+    };
+    syncStatusEl.title = descriptions[status] || 'Firestore real-time sync status';
   }
 }

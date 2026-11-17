@@ -12,28 +12,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Shopping Assistant">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <script type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-    import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-    import { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyDTDOJ4e5O649HGB7K16KilragGbpH8Pvs",
-      authDomain: "voice-shopping-assistant-app.firebaseapp.com",
-      projectId: "voice-shopping-assistant-app",
-      storageBucket: "voice-shopping-assistant-app.firebasestorage.app",
-      messagingSenderId: "590398854098",
-      appId: "1:590398854098:web:487a8fe79cd74834e9ee0b",
-      measurementId: "G-312M73JHYQ"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    window.firebaseAuth = getAuth(app);
-    window.firebaseDb = getFirestore(app);
-  </script>
 </head>
 <body>
-  <svg class="icon-sprite" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false">
     <defs>
       <symbol id="icon-cart" viewBox="0 0 24 24"><path d="M4 5h2l2.2 10.2a1.5 1.5 0 0 0 1.5 1.2h7.4a1.5 1.5 0 0 0 1.5-1.2L20 8H7"/><circle cx="10" cy="20" r="1.2"/><circle cx="17" cy="20" r="1.2"/></symbol>
       <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
@@ -101,7 +82,7 @@
 
         <div class="sync-status" id="syncStatus" title="Firestore real-time sync status">
           <span class="sync-indicator" aria-hidden="true"></span>
-          <span class="sync-label">Synced</span>
+          <span class="sync-label">Starting…</span>
         </div>
 
         <div class="language-select">
@@ -212,7 +193,7 @@
           <div class="budget-item budget-item--right">
             <span class="budget-caption" id="completedLabel">0 of 0 completed</span>
             <div class="progress-track" aria-hidden="true">
-              <div class="progress-bar" id="completedProgress" style="width: 0%;"></div>
+              <div class="progress-bar" id="completedProgress"></div>
             </div>
           </div>
         </div>
@@ -277,7 +258,7 @@
         </div>
 
         <!-- Smart Suggestions -->
-        <section class="suggestions-section" id="suggestionsSection" style="display: none;">
+        <section class="suggestions-section" id="suggestionsSection" hidden>
           <div class="suggestions-header">
             <h3><svg class="section-icon" aria-hidden="true"><use href="#icon-sparkles"/></svg> Recommended for you</h3>
           </div>
@@ -286,7 +267,7 @@
       </section>
 
       <!-- Search Results Section -->
-      <section class="search-section card" id="searchResultsSection" style="display: none;" aria-label="Search results">
+      <section class="search-section card" id="searchResultsSection" hidden aria-label="Search results">
         <div class="section-header">
           <h2>Catalog Search Results</h2>
           <button id="closeSearch" class="btn btn-ghost btn-sm">Close</button>
@@ -304,7 +285,7 @@
           </svg>
           <h3>NLP & AI Intent Inspector</h3>
         </div>
-        <button class="icon-btn" onclick="app.ui.toggleInspector()" aria-label="Close inspector"><svg class="icon-btn__icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+        <button class="icon-btn" id="closeInspector" aria-label="Close inspector"><svg class="icon-btn__icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
       </div>
 
       <div class="diagnostics-body">
@@ -343,7 +324,7 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3><svg class="modal-title-icon" aria-hidden="true"><use href="#icon-layers"/></svg> System Architecture &amp; Design</h3>
-          <button class="icon-btn" onclick="app.ui.toggleArchModal(false)" aria-label="Close modal"><svg class="icon-btn__icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+          <button class="icon-btn" id="closeArchModal" aria-label="Close modal"><svg class="icon-btn__icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
         </div>
         <div class="modal-body">
           <div class="arch-section">
@@ -374,29 +355,16 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3><svg class="modal-title-icon" aria-hidden="true"><use href="#icon-download"/></svg> Export &amp; Share Shopping List</h3>
-          <button class="icon-btn" onclick="app.ui.toggleExportModal(false)" aria-label="Close modal"><svg class="icon-btn__icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+          <button class="icon-btn" id="closeExportModal" aria-label="Close modal"><svg class="icon-btn__icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
         </div>
         <div class="modal-body">
           <textarea id="exportTextPreview" class="export-textarea" readonly rows="8"></textarea>
           <div class="modal-actions-row">
-            <button class="btn btn-primary btn-sm" onclick="
-              navigator.clipboard.writeText(document.getElementById('exportTextPreview').value);
-              app.ui.showToast('Copied to clipboard!', 'success');
-            ">Copy Text</button>
-            <button class="btn btn-ghost btn-sm" onclick="
-              navigator.clipboard.writeText(app.shoppingList.exportAsMarkdown());
-              app.ui.showToast('Copied Markdown!', 'success');
-            ">Copy Markdown</button>
+            <button id="copyTextBtn" class="btn btn-primary btn-sm">Copy Text</button>
+            <button id="copyMarkdownBtn" class="btn btn-ghost btn-sm">Copy Markdown</button>
             <button id="copyCsvBtn" class="btn btn-ghost btn-sm">Copy CSV</button>
             <button id="downloadCsvBtn" class="btn btn-ghost btn-sm">Download CSV</button>
-            <button class="btn btn-ghost btn-sm" onclick="
-              if (navigator.share) {
-                navigator.share({ title: 'My Shopping List', text: document.getElementById('exportTextPreview').value });
-              } else {
-                navigator.clipboard.writeText(document.getElementById('exportTextPreview').value);
-                app.ui.showToast('Web share not supported; copied text!', 'info');
-              }
-            ">Native Share</button>
+            <button id="shareListBtn" class="btn btn-ghost btn-sm">Native Share</button>
           </div>
         </div>
       </div>

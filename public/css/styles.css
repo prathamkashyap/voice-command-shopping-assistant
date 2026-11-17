@@ -667,6 +667,7 @@ body {
 }
 
 .progress-bar {
+  width: 0;
   height: 100%;
   background: var(--primary);
   border-radius: 999px;
@@ -1920,3 +1921,6 @@ body {
   }
 }
 
+
+[hidden] { display: none !important; }
+.icon-sprite { position: absolute; }
