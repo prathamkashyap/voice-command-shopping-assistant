@@ -10,7 +10,7 @@ Live Demo: https://voice-shopping-assistant-app.web.app
 
 - **Voice and Text Input:** Add, modify, remove, and search items using natural speech or typing. Supports multi-item commands (e.g., "add 2 bottles of milk and 3 apples").
 - **Local Storage:** Edit the list locally. The hosted app can synchronize with Firestore while open.
-- **Session Sync:** Firestore listeners receive updates for the same Firebase identity. Edits made while that identity is active are queued before upload. Startup keeps existing local-only items on the device. A reusable identity and a local-list import flow are planned.
+- **Session Sync:** Firestore listeners receive updates for the same Firebase identity. The account list and its pending edits are saved together on the device before upload. When a device list exists, use **Device list** to open it separately. A reusable sign-in and a list import flow are planned.
 - **Recommendations:** Suggestions based on recently added items, seasonal items, and catalog alternatives.
 - **List Management:** Inline quantity steppers, checkbox item completion with strikethrough, estimated total cost, and category filters.
 - **PWA Support:** Installable on desktop and mobile with Service Worker caching for offline use.

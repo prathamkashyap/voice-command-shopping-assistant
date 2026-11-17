@@ -100,11 +100,12 @@ export class SyncManager {
 
       await this.signInAnonymously(session);
       if (session.signal.aborted) return false;
-      const queue = await this.outbox.list(this.userId);
+      const { list, queue } = await this.outbox.readAccount(this.userId);
       if (session.signal.aborted) return false;
+      this.shoppingList?.enterAccount(this.userId, list);
       this.offlineQueue = queue;
       this.enabled = true;
-      if (queue.length) this.handleRemoteChanges([]);
+      this.handleRemoteChanges([]);
       this.setupOnlineOfflineListeners(session.signal);
 
       if (this.isOnline) {
@@ -153,8 +154,7 @@ export class SyncManager {
       };
       const unsubscribe = onAuthStateChanged(this.auth, user => {
         if (signal.aborted) return;
-        // The legacy list and outbox have no owner field. Stop on identity
-        // changes instead of delivering the previous user's records.
+        // Retire this sender before exposing another identity's list.
         if (this.userId && user?.uid !== this.userId) {
           onError(new Error('Sync identity changed'));
           return;
@@ -185,6 +185,7 @@ export class SyncManager {
     this.remoteItemIds.clear();
     this.offlineQueue = [];
     this.pendingPersistence.clear();
+    if (this.shoppingList?.leaveAccount?.()) this.renderList();
     this._notifySyncStatus(this.isOnline ? 'local-only' : 'offline');
   }
 
@@ -200,7 +201,7 @@ export class SyncManager {
     return this.offlineQueue.length + this.pendingPersistence.size;
   }
 
-  async syncItems(items = [], deletedItemIds = []) {
+  async syncItems(items = [], deletedItemIds = [], undoChanged = false) {
     if (!this.enabled || !this.userId) return false;
     if (!items.length && !deletedItemIds.length) return true;
 
@@ -221,10 +222,15 @@ export class SyncManager {
       });
     }
 
+    let listChange;
+    if (this.shoppingList?.accountOwner === userId) {
+      listChange = undoChanged ? { lastDeletedItem: structuredClone(this.shoppingList.lastDeletedItem) } : {};
+    }
+
     this.pendingPersistence.add(groups);
     this._notifySyncStatus(this.isOnline ? 'syncing' : 'offline');
     try {
-      const entries = await this.outbox.append(userId, groups);
+      const entries = await this.outbox.append(userId, groups, listChange);
       if (!current()) return false;
       for (const entry of entries) {
         if (!this.offlineQueue.some(group => group.sequence === entry.sequence)) this.offlineQueue.push(entry);
@@ -232,7 +238,7 @@ export class SyncManager {
     } catch (error) {
       if (current()) {
         this.outboxFailed = true;
-        this._notifySyncStatus('error');
+        this._notifySyncStatus('storage-error');
         console.warn('Could not store changes for sync:', error.message);
       }
       return false;
@@ -420,8 +426,8 @@ export class SyncManager {
    * Notify all registered callbacks of sync status change
    */
   _notifySyncStatus(status) {
-    this.syncStatus = (this.listenerFailed || this.outboxFailed) && ['syncing', 'synced', 'local-items'].includes(status)
-      ? 'error'
+    this.syncStatus = this.outboxFailed ? 'storage-error'
+      : this.listenerFailed && ['syncing', 'synced', 'local-items'].includes(status) ? 'error'
       : status;
     this.syncStatusCallbacks.forEach(cb => cb(this.syncStatus));
   }
@@ -495,8 +501,8 @@ export class SyncManager {
           const millis = getTimestampMillis(data.updatedAt);
           remoteItems.push({ ...data, id: doc.id, _updatedAtMillis: millis, updatedAt: millis ?? Date.now() });
         });
-        this.handleRemoteChanges(remoteItems);
         this.remoteConfirmed = !snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites;
+        this.handleRemoteChanges(remoteItems, this.remoteConfirmed);
         if (this.remoteConfirmed) {
           this.remoteItemIds = new Set(remoteItems.filter(item => !item.deleted).map(item => item.id));
           if (!this.syncInProgress && this.getPendingOperationCount() === 0) {
@@ -528,36 +534,42 @@ export class SyncManager {
   /**
    * Handle remote changes from real-time listener
    */
-  async handleRemoteChanges(remoteItems) {
-    if (!this.enabled) return;
+  mergeProjection(localItems, remoteItems, pending) {
+    const items = new Map(this.mergeItems(localItems, remoteItems).map(item => [item.id, item]));
+    for (const group of pending) {
+      for (const item of group.items) items.set(item.id, { ...item });
+      for (const id of group.deletedItemIds) items.delete(id);
+    }
+    return [...items.values()];
+  }
 
+  renderList() {
+    const app = globalThis.window?.app;
+    if (app?.ui) {
+      app.ui.renderShoppingList();
+      app.updateSuggestions();
+    }
+  }
+
+  async handleRemoteChanges(remoteItems, confirmed = false) {
+    if (!this.enabled || !this.shoppingList) return;
+
+    const pending = [...this.offlineQueue, ...Array.from(this.pendingPersistence).flat()];
+    this.shoppingList.items = this.mergeProjection(this.shoppingList.items, remoteItems, pending);
+    this.renderList();
+    if (!confirmed || this.shoppingList.accountOwner !== this.userId) return;
+
+    const { userId, session } = this;
     try {
-      // Get current local items
-      const localItems = this.shoppingList ? this.shoppingList.items : [];
-      
-      const merged = this.mergeItems(localItems, remoteItems);
-      const pending = [...this.offlineQueue, ...Array.from(this.pendingPersistence).flat()];
-      const items = new Map(merged.map(item => [item.id, item]));
-      for (const group of pending) {
-        for (const item of group.items) items.set(item.id, { ...item });
-        for (const id of group.deletedItemIds) items.delete(id);
-      }
-
-      // Update local state
-      if (this.shoppingList) {
-        this.shoppingList.items = [...items.values()];
-        this.shoppingList.saveLocal();
-      }
-
-      // Notify UI of changes (if app has a reference)
-      if (globalThis.window?.app?.ui) {
-        window.app.ui.renderShoppingList();
-        window.app.updateSuggestions();
-      }
-
-      console.log('[SyncManager] Remote changes merged');
+      await this.outbox.mergeRemote(userId, (items, persisted) =>
+        this.mergeProjection(items, remoteItems, persisted)
+      );
     } catch (error) {
-      console.warn('Failed to handle remote changes:', error.message);
+      if (this.enabled && this.userId === userId && this.session === session) {
+        this.outboxFailed = true;
+        this._notifySyncStatus('storage-error');
+        console.warn('Could not save the synced list on this device:', error.message);
+      }
     }
   }
 

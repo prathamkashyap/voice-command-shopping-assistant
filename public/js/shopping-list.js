@@ -6,9 +6,13 @@ export class ShoppingList {
     this.items = [];
     this.lastDeletedItem = null;
     this.syncManager = syncManager;
+    this.accountOwner = null;
+    this.hasDeviceList = false;
   }
 
   load() {
+    this.items = [];
+    this.lastDeletedItem = null;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -25,7 +29,23 @@ export class ShoppingList {
     }
   }
 
+  enterAccount(owner, snapshot) {
+    this.hasDeviceList = this.items.length > 0;
+    this.accountOwner = owner;
+    this.items = snapshot?.items ?? [];
+    this.lastDeletedItem = snapshot?.lastDeletedItem ?? null;
+  }
+
+  leaveAccount() {
+    if (this.accountOwner === null) return false;
+    this.accountOwner = null;
+    this.hasDeviceList = false;
+    this.load();
+    return true;
+  }
+
   saveLocal() {
+    if (this.accountOwner !== null) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.items));
     } catch (e) {
@@ -33,9 +53,12 @@ export class ShoppingList {
     }
   }
 
-  save(changedItems, deletedItemIds = []) {
-    this.saveLocal();
-    this.syncToFirestore(changedItems, deletedItemIds);
+  save(changedItems, deletedItemIds = [], undoChanged = false) {
+    if (this.accountOwner === null) {
+      this.saveLocal();
+      if (undoChanged) this.saveUndo();
+    }
+    this.syncToFirestore(changedItems, deletedItemIds, undoChanged);
   }
 
   saveUndo() {
@@ -50,10 +73,11 @@ export class ShoppingList {
     }
   }
 
-  async syncToFirestore(changedItems, deletedItemIds) {
-    if (this.syncManager && this.syncManager.isEnabled()) {
+  async syncToFirestore(changedItems, deletedItemIds, undoChanged) {
+    if (this.accountOwner !== null && this.syncManager?.isEnabled() &&
+        this.syncManager.getUserId() === this.accountOwner) {
       try {
-        await this.syncManager.syncItems(changedItems, deletedItemIds);
+        await this.syncManager.syncItems(changedItems, deletedItemIds, undoChanged);
       } catch (e) {
         console.warn('Firestore sync failed:', e);
       }
@@ -99,8 +123,7 @@ export class ShoppingList {
       this.lastDeletedItem = deletedItem;
       // Remove from local array (UI disappears immediately)
       this.items = this.items.filter(i => i.id !== id);
-      this.save([], [id]);
-      this.saveUndo();
+      this.save([], [id], true);
     }
   }
 
@@ -127,9 +150,8 @@ export class ShoppingList {
       restored = itemToRestore;
     }
     
-    this.save([restored]);
     this.lastDeletedItem = null;
-    this.saveUndo();
+    this.save([restored], [], true);
     return true;
   }
 

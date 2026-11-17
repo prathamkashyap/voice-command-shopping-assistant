@@ -95,7 +95,7 @@ describe('outbox replay acknowledgment', () => {
     const send = t.mock.method(sync, 'publishItems', async () => true);
     assert.equal(await sync.syncItems([{ id: 'milk' }]), false);
     assert.equal(send.mock.callCount(), 0);
-    assert.equal(sync.syncStatus, 'error');
+    assert.equal(sync.syncStatus, 'storage-error');
   });
 
   it('merges a tombstone into a document that may never have been uploaded', async () => {
@@ -427,11 +427,19 @@ describe('SyncManager', () => {
           return () => { entry.stops++; };
         }
       };
-      const sm = new SyncManager({ loadFirestore: load ? () => load(sdk) : async () => sdk });
+      const sm = new SyncManager({
+        loadFirestore: load ? () => load(sdk) : async () => sdk,
+        outbox: {
+          async mergeRemote(_owner, merge) {
+            sm.shoppingList.saves++;
+            merge([], sm.offlineQueue);
+          }
+        }
+      });
       sm.db = {};
       sm.userId = 'shopper';
       sm.enabled = sm.isOnline = true;
-      sm.shoppingList = { items: [], saves: 0, saveLocal() { this.saves++; } };
+      sm.shoppingList = { accountOwner: 'shopper', items: [], saves: 0 };
       return { sm, subscriptions };
     }
 

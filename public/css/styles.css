@@ -256,7 +256,7 @@ body {
   background: var(--text-faint);
 }
 
-.sync-status[data-status="error"] .sync-indicator {
+.sync-status:is([data-status="error"], [data-status="storage-error"]) .sync-indicator {
   background: var(--error);
   animation: syncPulse 1s ease-in-out infinite;
 }
@@ -274,7 +274,7 @@ body {
 .sync-status[data-status="synced"] .sync-label { color: var(--success); }
 .sync-status[data-status="syncing"] .sync-label { color: var(--warning); }
 .sync-status[data-status="offline"] .sync-label { color: var(--text-faint); }
-.sync-status[data-status="error"] .sync-label { color: var(--error); }
+.sync-status:is([data-status="error"], [data-status="storage-error"]) .sync-label { color: var(--error); }
 
 .language-select select {
   padding: 5px 8px;

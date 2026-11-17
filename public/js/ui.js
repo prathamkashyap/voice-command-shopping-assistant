@@ -80,6 +80,8 @@ export class UI {
   }
 
   renderShoppingList() {
+    const deviceListLink = document.getElementById('deviceListLink');
+    if (deviceListLink) deviceListLink.hidden = !this.app.shoppingList.hasDeviceList;
     let items = this.app.shoppingList.getAll();
     const totalCount = this.app.shoppingList.totalItems;
     if (this.listCountEl) {
@@ -549,6 +551,7 @@ export class UI {
         synced: pendingCount > 0 ? `Syncing ${pendingCount}` : 'Synced',
         syncing: 'Syncing…',
         offline: pendingCount > 0 ? `Offline • ${pendingCount}` : 'Offline',
+        'storage-error': 'Storage error',
         error: 'Sync Error'
       };
       syncLabel.textContent = labels[status] || 'Unknown';
@@ -558,6 +561,7 @@ export class UI {
       'local-items': 'Some items are only stored on this device',
       connecting: 'Connecting to cloud sync',
       offline: 'Offline — changes are queued locally',
+      'storage-error': 'Some changes could not be saved on this device',
       error: 'Sync encountered an error'
     };
     syncStatusEl.title = descriptions[status] || 'Firestore real-time sync status';

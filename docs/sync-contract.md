@@ -32,8 +32,8 @@ New readers initially accept old documents with a baseline revision. In emulator
 
 ## Implementation status
 
-Authenticated mutations now go to an IndexedDB outbox keyed by Firebase UID before transport. The sender removes a group after Firestore acknowledges it. Web Locks serializes drain work across tabs where supported. Each tab serializes its own work in browsers without Web Locks.
+Authenticated list edits and undo state are committed with their queued mutations in one IndexedDB transaction scoped to the Firebase UID. The sender removes a group after Firestore acknowledges it. Web Locks serializes drain work across tabs where supported. Each tab serializes its own work in browsers without Web Locks.
 
-Startup subscribes to snapshots without writing a copy of the local list. Authenticated edits send only changed records. A queued edit stays visible, and a queued deletion stays hidden, when an older snapshot arrives. Items with no matching cloud record remain on the device.
+Startup reads the current account's cached list and queue together and subscribes to snapshots. Authenticated edits send only changed records. A queued edit stays visible, and a queued deletion stays hidden, when an older snapshot arrives. The IndexedDB upgrade rebuilds the account cache from its existing queue. Previously acknowledged cloud items join the cache when the listener next receives confirmed records.
 
-The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. The new sender only reads the current UID's entries. Migration needs a way for the user to review those legacy records and choose where they belong. The list projection still uses its original local-storage key. A shared transaction for the projection and outbox, revision checks, and server-side replay receipts are subsequent steps.
+Existing device-list data remains accessible through **Device list** or `/?mode=local`. The account and device lists use separate storage. The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. An assisted import, revision checks, and server-side replay receipts are subsequent steps.

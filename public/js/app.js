@@ -96,7 +96,7 @@ class App {
       await initializeFirebase(this.runtimeMode);
       await this.syncManager.init(this.shoppingList);
       if (!this.syncManager.isEnabled()) {
-        this.ui.setSyncStatus('local-only');
+        this.ui.setSyncStatus(this.syncManager.syncStatus);
         return;
       }
       this.errorTracker?.setUserId(this.syncManager.getUserId());
@@ -106,7 +106,9 @@ class App {
         this.ui.setSyncStatus(status);
         if (status === previousSyncStatus) return;
         if (status === 'offline') {
-          this.ui.showToast('Offline — changes are saved locally and will sync later', 'warning');
+          this.ui.showToast('Offline. Cloud sync resumes when you reconnect.', 'warning');
+        } else if (status === 'storage-error') {
+          this.ui.showToast('Some changes could not be saved. Export the list before closing this tab.', 'warning');
         }
         previousSyncStatus = status;
       });

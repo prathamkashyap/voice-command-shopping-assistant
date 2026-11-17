@@ -440,12 +440,14 @@ describe('ShoppingList', () => {
       const syncCalls = [];
       const syncManager = {
         isEnabled: () => true,
+        getUserId: () => 'shopper',
         syncItems: (items, deletedItemIds = []) => {
           syncCalls.push({ itemCount: items.length, deletedItemIds });
           return Promise.resolve(true);
         }
       };
       const testList = new ShoppingList(syncManager);
+      testList.enterAccount('shopper');
       global.localStorage = {
         getItem: () => null,
         setItem: () => {},
@@ -471,11 +473,13 @@ describe('ShoppingList', () => {
       const calls = [];
       const list = new ShoppingList({
         isEnabled: () => true,
+        getUserId: () => 'shopper',
         syncItems: (items, deletedIds) => calls.push({
           items: items.map(({ id, quantity, completed }) => ({ id, quantity, completed })),
           deletedIds
         })
       });
+      list.enterAccount('shopper');
       list.items = [
         { id: 'milk', name: 'Milk', category: 'Dairy', quantity: 1, completed: false },
         { id: 'bread', name: 'Bread', category: 'Bakery', quantity: 1, completed: false }
