@@ -33,9 +33,9 @@ export class ShoppingList {
     }
   }
 
-  save(deletedItemIds = []) {
+  save(changedItems, deletedItemIds = []) {
     this.saveLocal();
-    this.syncToFirestore(deletedItemIds);
+    this.syncToFirestore(changedItems, deletedItemIds);
   }
 
   saveUndo() {
@@ -50,10 +50,10 @@ export class ShoppingList {
     }
   }
 
-  async syncToFirestore(deletedItemIds = []) {
+  async syncToFirestore(changedItems, deletedItemIds) {
     if (this.syncManager && this.syncManager.isEnabled()) {
       try {
-        await this.syncManager.syncItems(this.items, deletedItemIds);
+        await this.syncManager.syncItems(changedItems, deletedItemIds);
       } catch (e) {
         console.warn('Firestore sync failed:', e);
       }
@@ -88,7 +88,7 @@ export class ShoppingList {
       this.items.push(item);
     }
     
-    this.save();
+    this.save([existing ?? item]);
   }
 
   remove(id) {
@@ -99,19 +99,9 @@ export class ShoppingList {
       this.lastDeletedItem = deletedItem;
       // Remove from local array (UI disappears immediately)
       this.items = this.items.filter(i => i.id !== id);
-      this.save([id]);
+      this.save([], [id]);
       this.saveUndo();
     }
-  }
-
-  // Soft delete: creates a deletion mutation for Firestore without
-  // affecting the local items array (which is already filtered by remove())
-  // This is called by syncItems when syncing to Firestore
-  getDeletionMutations() {
-    // This method is not directly used; syncItems handles deletion via
-    // the items array passed to it. For deleted items, we need to track them.
-    // The SyncManager will handle deletion by receiving items with deleted: true
-    return [];
   }
 
   undo() {
@@ -125,7 +115,8 @@ export class ShoppingList {
       i.unit === this.lastDeletedItem.unit
     );
     
-    if (existing) {
+    let restored = existing;
+    if (restored) {
       existing.quantity += this.lastDeletedItem.quantity;
       existing.updatedAt = this._now();
     } else {
@@ -133,9 +124,10 @@ export class ShoppingList {
       const { deletedAt, ...itemToRestore } = this.lastDeletedItem;
       itemToRestore.updatedAt = this._now();
       this.items.push(itemToRestore);
+      restored = itemToRestore;
     }
     
-    this.save();
+    this.save([restored]);
     this.lastDeletedItem = null;
     this.saveUndo();
     return true;
@@ -154,7 +146,7 @@ export class ShoppingList {
         item.updatedAt = this._now();
       }
       this.items[index] = item;
-      this.save();
+      this.save([item]);
     }
   }
 
@@ -185,7 +177,7 @@ export class ShoppingList {
     // Capture all current item IDs for proper deletion sync
     const itemIdsToDelete = this.items.map(item => item.id);
     this.items = [];
-    this.save(itemIdsToDelete);
+    this.save([], itemIdsToDelete);
     // Return the IDs so callers can report or test the deletion scope
     return itemIdsToDelete;
   }
@@ -196,7 +188,7 @@ export class ShoppingList {
 
     const ids = new Set(completedIds);
     this.items = this.items.filter(item => !ids.has(item.id));
-    this.save(completedIds);
+    this.save([], completedIds);
     return completedIds;
   }
 
@@ -205,7 +197,7 @@ export class ShoppingList {
     if (item) {
       item.completed = !item.completed;
       item.updatedAt = this._now();
-      this.save();
+      this.save([item]);
       return item;
     }
     return null;
@@ -223,7 +215,7 @@ export class ShoppingList {
 
     item.quantity = Number((newQty).toFixed(2));
     item.updatedAt = this._now();
-    this.save();
+    this.save([item]);
     return item;
   }
 

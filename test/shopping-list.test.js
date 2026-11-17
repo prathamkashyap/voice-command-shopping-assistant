@@ -464,7 +464,28 @@ describe('ShoppingList', () => {
       assert.equal(testList.items[0].id, 'todo');
       assert.equal(syncCalls.length, 1);
       assert.deepEqual(syncCalls[0].deletedItemIds, ['done']);
-      assert.equal(syncCalls[0].itemCount, 1);
+      assert.equal(syncCalls[0].itemCount, 0);
+    });
+
+    it('sends the changed item only when updating quantity and completion', () => {
+      const calls = [];
+      const list = new ShoppingList({
+        isEnabled: () => true,
+        syncItems: (items, deletedIds) => calls.push({
+          items: items.map(({ id, quantity, completed }) => ({ id, quantity, completed })),
+          deletedIds
+        })
+      });
+      list.items = [
+        { id: 'milk', name: 'Milk', category: 'Dairy', quantity: 1, completed: false },
+        { id: 'bread', name: 'Bread', category: 'Bakery', quantity: 1, completed: false }
+      ];
+      list.incrementQuantity('milk');
+      list.toggleCompleted('bread');
+      assert.deepEqual(calls, [
+        { items: [{ id: 'milk', quantity: 2, completed: false }], deletedIds: [] },
+        { items: [{ id: 'bread', quantity: 1, completed: true }], deletedIds: [] }
+      ]);
     });
   });
 });
