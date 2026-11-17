@@ -123,23 +123,21 @@ class App {
   async registerServiceWorker() {
     if ('serviceWorker' in navigator) {
       try {
-        const registration = await navigator.serviceWorker.register('/sw.js');
+        const registration = await navigator.serviceWorker.register('/sw.js', {
+          type: 'module',
+          updateViaCache: 'none'
+        });
         console.log('[App] Service Worker registered:', registration.scope);
         
         registration.addEventListener('updatefound', () => {
           const newWorker = registration.installing;
           newWorker?.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              this.ui.showToast('New version available! Refresh to update.', 'info');
+              this.ui.showToast('Update ready. Close all shopping tabs, then reopen the app.', 'info');
             }
           });
         });
         
-        navigator.serviceWorker.addEventListener('message', (event) => {
-          if (event.data && event.data.type === 'SYNC_COMPLETE') {
-            this.ui.showToast('Sync completed', 'success');
-          }
-        });
       } catch (error) {
         console.warn('[App] Service Worker registration failed:', error);
       }
