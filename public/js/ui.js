@@ -123,13 +123,14 @@ export class UI {
     this.shoppingListEl.innerHTML = '';
 
     // Group items by category
-    const grouped = {};
+    const grouped = new Map();
     for (const item of items) {
-      if (!grouped[item.category]) grouped[item.category] = [];
-      grouped[item.category].push(item);
+      const category = item.category || 'Other';
+      if (!grouped.has(category)) grouped.set(category, []);
+      grouped.get(category).push(item);
     }
 
-    for (const [category, categoryItems] of Object.entries(grouped)) {
+    for (const [category, categoryItems] of grouped) {
       const categoryHeader = document.createElement('div');
       categoryHeader.className = 'category-header';
       categoryHeader.innerHTML = `
@@ -186,34 +187,45 @@ export class UI {
       : '';
 
     div.innerHTML = `
-      <label class="item-checkbox-wrap" aria-label="Mark ${this.escapeHtml(item.name)} as completed">
-        <input type="checkbox" class="item-checkbox" ${item.completed ? 'checked' : ''}>
+      <label class="item-checkbox-wrap">
+        <input type="checkbox" class="item-checkbox">
         <span class="checkbox-custom"></span>
       </label>
       
       <div class="item-info">
-        <span class="item-name">${this.escapeHtml(item.name)}</span>
+        <span class="item-name"></span>
         <div class="item-meta">
-          <span class="item-category">${this.escapeHtml(item.category)}</span>
-          ${priceText ? `<span class="item-price-tag">${priceText}</span>` : ''}
+          <span class="item-category"></span>
+          <span class="item-price-tag" hidden></span>
         </div>
       </div>
 
       <div class="item-qty-stepper">
         <button class="qty-btn dec" aria-label="Decrease quantity" title="Decrease">${icon('minus', 'ui-icon--sm')}</button>
-        <span class="item-qty">${item.quantity}<span class="item-unit">${this.escapeHtml(item.unit)}</span></span>
+        <span class="item-qty"><span class="item-unit"></span></span>
         <button class="qty-btn inc" aria-label="Increase quantity" title="Increase">${icon('plus', 'ui-icon--sm')}</button>
       </div>
 
       <div class="item-actions">
-        <button class="icon-btn delete" aria-label="Remove ${this.escapeHtml(item.name)}" title="Remove">
+        <button class="icon-btn delete" title="Remove">
           ${icon('trash', 'ui-icon--sm')}
         </button>
       </div>
     `;
 
-    // Checkbox toggle
-    div.querySelector('.item-checkbox').addEventListener('change', () => {
+    div.querySelector('.item-name').textContent = item.name;
+    div.querySelector('.item-category').textContent = item.category;
+    const price = div.querySelector('.item-price-tag');
+    price.textContent = priceText;
+    price.hidden = !priceText;
+    div.querySelector('.item-qty').prepend(String(item.quantity));
+    div.querySelector('.item-unit').textContent = item.unit;
+    div.querySelector('.icon-btn.delete').setAttribute('aria-label', `Remove ${item.name}`);
+
+    const checkbox = div.querySelector('.item-checkbox');
+    checkbox.checked = Boolean(item.completed);
+    checkbox.setAttribute('aria-label', `Mark ${item.name} as completed`);
+    checkbox.addEventListener('change', () => {
       this.app.toggleItemCompleted(item.id);
     });
 
@@ -328,11 +340,12 @@ export class UI {
           </div>
         </div>
         <div class="suggestion-side">
-          <span class="product-price">$${product.price}</span>
+          <span class="product-price"></span>
           <button class="btn btn-primary btn-sm">${icon('plus', 'ui-icon--sm')}<span>Add</span></button>
         </div>
       `;
 
+      div.querySelector('.product-price').textContent = `$${product.price}`;
       div.querySelector('button').addEventListener('click', () => {
         const newItem = {
           id: crypto.randomUUID(),
