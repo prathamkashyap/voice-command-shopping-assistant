@@ -72,7 +72,7 @@ This document details the architectural decisions, trade-offs, and engineering p
 | **Hybrid Parser** | `public/js/hybrid-parser.js` | Multi-item router, LLM fallback coordinator, and latency tracker |
 | **LLM Parser** | `public/js/llm-parser.js` | Cloud function invocation and local Mock LLM clause parser |
 | **Catalog** | `public/js/product-catalog.js` | Fuzzy matching against catalog and pricing data |
-| **Recommendations** | `public/js/recommendation-engine.js` | Purchase frequency, seasonal trends, and smart dietary substitutes |
+| **Recommendations** | `public/js/recommendation-engine.js` | Frequently added items, seasonal suggestions, and catalog alternatives |
 
 ---
 
