@@ -48,6 +48,10 @@ test('Firestore listener receives changes across two sessions with the same iden
     const item = doc(collection(writerDb, 'users', user.uid, 'shoppingList'), 'milk');
     await setDoc(item, { name: 'Milk', quantity: 2, updatedAt: firestore.serverTimestamp() });
     assert.equal((await observed).quantity, 2);
+    const tombstone = doc(collection(readerDb, 'users', user.uid, 'shoppingList'), 'never-uploaded');
+    sync.saveSyncState = () => {};
+    assert.equal(await sync.syncItems([], [tombstone.id]), true);
+    assert.equal((await firestore.getDocFromServer(tombstone)).data().deleted, true);
     await assert.rejects(
       firestore.getDocFromServer(doc(outsiderDb, item.path)),
       { code: 'permission-denied' }

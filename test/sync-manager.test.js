@@ -2,6 +2,62 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { SyncManager } from '../public/js/sync-manager.js';
 
+describe('offline replay acknowledgment', () => {
+  it('keeps the in-flight operation and later operations until a successful replay', async t => {
+    let stored;
+    t.mock.method(console, 'log', () => {});
+    const sync = new SyncManager();
+    sync.enabled = sync.isOnline = true;
+    sync.userId = 'shopper';
+    const first = { type: 'delete', deletedId: 'milk' };
+    const second = { type: 'delete', deletedId: 'bread' };
+    sync.offlineQueue = [first, second];
+    sync.saveOfflineQueue = () => { stored = JSON.parse(JSON.stringify(sync.offlineQueue)); };
+    sync.saveOfflineQueue();
+    let finish;
+    const send = t.mock.method(sync, 'syncItems', () => new Promise(resolve => { finish = resolve; }));
+    const replay = sync.flushOfflineQueue();
+    assert.deepEqual(stored, [first, second], 'a reload before acknowledgment still sees both changes');
+    await sync.flushOfflineQueue();
+    assert.equal(send.mock.callCount(), 1);
+    finish(false);
+    await replay;
+    assert.deepEqual(sync.offlineQueue, [first, second]);
+    assert.deepEqual(stored, [first, second]);
+    assert.equal(sync.syncStatus, 'error');
+
+    const sent = [];
+    send.mock.mockImplementation(async (_items, ids) => {
+      sent.push(...ids);
+      return true;
+    });
+    await sync.flushOfflineQueue();
+    assert.deepEqual(sent, ['milk', 'bread']);
+    assert.deepEqual(stored, []);
+    assert.equal(sync.syncStatus, 'synced');
+  });
+
+  it('merges a tombstone into a document that may never have been uploaded', async () => {
+    const writes = [];
+    const sync = new SyncManager({
+      loadFirestore: async () => ({
+        collection: () => 'list',
+        doc: (_collection, id) => id,
+        serverTimestamp: () => 'server-time',
+        writeBatch: () => ({
+          set: (...args) => writes.push(args),
+          commit: async () => {}
+        })
+      })
+    });
+    sync.enabled = sync.isOnline = true;
+    sync.userId = 'shopper';
+    sync.saveSyncState = () => {};
+    assert.equal(await sync.syncItems([], ['never-uploaded']), true);
+    assert.deepEqual(writes, [['never-uploaded', { deleted: true, updatedAt: 'server-time' }, { merge: true }]]);
+  });
+});
+
 describe('SyncManager', () => {
   let syncManager;
 

@@ -253,17 +253,17 @@ export class SyncManager {
       // Handle deletions: mark items as deleted in Firestore
       for (const deletedId of deletedItemIds) {
         const itemRef = doc(itemsRef, deletedId);
-        batch.update(itemRef, {
+        batch.set(itemRef, {
           deleted: true,
           updatedAt: serverTimestamp()
-        });
+        }, { merge: true });
       }
 
       await batch.commit();
       if (!current()) return false;
       this.lastSyncTime = Date.now();
       this.saveSyncState();
-      this._notifySyncStatus(this.isOnline ? 'synced' : 'offline');
+      this._notifySyncStatus(this.isOnline ? (this.offlineQueue.length ? 'syncing' : 'synced') : 'offline');
       return true;
     } catch (error) {
       if (!current()) return false;
@@ -620,26 +620,32 @@ export class SyncManager {
     this.queueFlushInProgress = true;
     console.log('[SyncManager] Flushing offline queue:', this.offlineQueue.length, 'operations');
 
-    const queue = [...this.offlineQueue];
-    this.offlineQueue = [];
-    this.saveOfflineQueue();
+    const queue = this.offlineQueue;
+    const session = this.session;
+    const userId = this.userId;
+    const current = () => this.enabled && this.session === session &&
+      this.userId === userId && this.offlineQueue === queue;
 
-    for (const operation of queue) {
-      try {
-        await this.executeOfflineOperation(operation);
-      } catch (error) {
-        console.warn('Failed to execute offline operation:', error.message);
-        // Re-queue failed operation
-        this.offlineQueue.unshift(operation);
+    try {
+      while (current() && this.isOnline && queue.length > 0) {
+        const operation = queue[0];
+        const acknowledged = await this.executeOfflineOperation(operation);
+        if (!current()) return;
+        if (!acknowledged) {
+          if (this.isOnline) this._notifySyncStatus('error');
+          return;
+        }
+        queue.shift();
         this.saveOfflineQueue();
       }
-    }
-
-    this.queueFlushInProgress = false;
-    
-    // If more operations were added during flush, flush again
-    if (this.offlineQueue.length > 0) {
-      this.flushOfflineQueue();
+      if (current() && this.isOnline && queue.length === 0) this._notifySyncStatus('synced');
+    } catch (error) {
+      if (current()) {
+        console.warn('Failed to execute offline operation:', error.message);
+        this._notifySyncStatus('error');
+      }
+    } finally {
+      this.queueFlushInProgress = false;
     }
   }
 
@@ -649,14 +655,13 @@ export class SyncManager {
     switch (type) {
       case 'add':
       case 'update':
-        await this.syncItems([item]);
-        break;
+        return this.syncItems([item]);
       case 'delete':
-        await this.syncItems([], [deletedId]);
-        break;
+        return this.syncItems([], [deletedId]);
       case 'clear':
-        await this.syncItems([], itemIds);
-        break;
+        return this.syncItems([], itemIds);
+      default:
+        return false;
     }
   }
 }
