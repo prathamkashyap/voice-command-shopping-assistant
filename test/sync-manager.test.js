@@ -2,44 +2,106 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { SyncManager } from '../public/js/sync-manager.js';
 
-describe('offline replay acknowledgment', () => {
-  it('keeps the in-flight operation and later operations until a successful replay', async t => {
-    let stored;
-    t.mock.method(console, 'log', () => {});
-    const sync = new SyncManager();
-    sync.enabled = sync.isOnline = true;
+class MemoryOutbox {
+  groups = [];
+  sequence = 0;
+
+  async append(owner, groups) {
+    const entries = groups.map(group => ({ ...structuredClone(group), owner, sequence: ++this.sequence }));
+    this.groups.push(...entries);
+    return entries;
+  }
+
+  async list(owner) {
+    return this.groups.filter(group => group.owner === owner);
+  }
+
+  async acknowledge(sequence) {
+    this.groups = this.groups.filter(group => group.sequence !== sequence);
+  }
+
+  withSender(_owner, send) {
+    return send();
+  }
+}
+
+describe('outbox replay acknowledgment', () => {
+  function manager(outbox = new MemoryOutbox()) {
+    const sync = new SyncManager({ outbox });
+    sync.enabled = sync.isOnline = sync.remoteConfirmed = true;
     sync.userId = 'shopper';
-    const first = { type: 'delete', deletedId: 'milk' };
-    const second = { type: 'delete', deletedId: 'bread' };
-    sync.offlineQueue = [first, second];
-    sync.saveOfflineQueue = () => { stored = JSON.parse(JSON.stringify(sync.offlineQueue)); };
-    sync.saveOfflineQueue();
+    return sync;
+  }
+
+  it('queues edits during an in-flight write and sends both in order', async t => {
+    const sync = manager();
     let finish;
-    const send = t.mock.method(sync, 'syncItems', () => new Promise(resolve => { finish = resolve; }));
-    const replay = sync.flushOfflineQueue();
-    assert.deepEqual(stored, [first, second], 'a reload before acknowledgment still sees both changes');
-    await sync.flushOfflineQueue();
+    let started;
+    const firstWrite = new Promise(resolve => { started = resolve; });
+    const sent = [];
+    t.mock.method(sync, 'publishItems', async items => {
+      sent.push(items[0].quantity);
+      if (sent.length > 1) return true;
+      started();
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const milk = { id: 'milk', quantity: 1 };
+    const first = sync.syncItems([milk]);
+    await firstWrite;
+    milk.quantity = 3;
+    const second = sync.syncItems([milk]);
+    // append has been called synchronously before the second syncItems awaits.
+    const queued = await sync.outbox.list('shopper');
+    assert.deepEqual(queued.map(group => group.items[0].quantity), [1, 3]);
+    assert.deepEqual(sent, [1]);
+    finish(true);
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    assert.deepEqual(sent, [1, 3]);
+    assert.deepEqual(await sync.outbox.list('shopper'), []);
+    assert.equal(sync.syncStatus, 'synced');
+  });
+
+  it('keeps the failed group durably and resumes in order for the same identity only', async t => {
+    const original = manager();
+    original.isOnline = false;
+    await original.syncItems([], ['milk']);
+    await original.syncItems([], ['bread']);
+
+    const restored = manager(original.outbox);
+    restored.userId = 'other';
+    assert.equal(await restored.flushOfflineQueue(), true);
+    assert.equal((await restored.outbox.list('shopper')).length, 2);
+
+    restored.userId = 'shopper';
+    const send = t.mock.method(restored, 'publishItems', async () => false);
+    assert.equal(await restored.flushOfflineQueue(), false);
     assert.equal(send.mock.callCount(), 1);
-    finish(false);
-    await replay;
-    assert.deepEqual(sync.offlineQueue, [first, second]);
-    assert.deepEqual(stored, [first, second]);
-    assert.equal(sync.syncStatus, 'error');
+    assert.equal((await restored.outbox.list('shopper')).length, 2);
 
     const sent = [];
     send.mock.mockImplementation(async (_items, ids) => {
       sent.push(...ids);
       return true;
     });
-    await sync.flushOfflineQueue();
+    await restored.flushOfflineQueue();
     assert.deepEqual(sent, ['milk', 'bread']);
-    assert.deepEqual(stored, []);
-    assert.equal(sync.syncStatus, 'synced');
+    assert.deepEqual(await restored.outbox.list('shopper'), []);
+  });
+
+  it('reports a failed local queue write without sending an unrecorded edit', async t => {
+    const sync = manager();
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(sync.outbox, 'append', async () => { throw new Error('storage unavailable'); });
+    const send = t.mock.method(sync, 'publishItems', async () => true);
+    assert.equal(await sync.syncItems([{ id: 'milk' }]), false);
+    assert.equal(send.mock.callCount(), 0);
+    assert.equal(sync.syncStatus, 'error');
   });
 
   it('merges a tombstone into a document that may never have been uploaded', async () => {
     const writes = [];
     const sync = new SyncManager({
+      outbox: new MemoryOutbox(),
       loadFirestore: async () => ({
         collection: () => 'list',
         doc: (_collection, id) => id,
@@ -359,7 +421,7 @@ describe('SyncManager', () => {
       const subscriptions = [];
       const sdk = {
         collection: (db, ...path) => ({ db, path }),
-        onSnapshot(ref, next, error) {
+        onSnapshot(ref, _options, next, error) {
           const entry = { ref, next, error, stops: 0 };
           subscriptions.push(entry);
           return () => { entry.stops++; };

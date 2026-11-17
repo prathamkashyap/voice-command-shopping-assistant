@@ -78,3 +78,31 @@ test('the first installed shell reopens offline and retains the local list', asy
   await command.press('Enter');
   await expect(page.locator('.list-item')).toHaveCount(2);
 });
+
+test('the IndexedDB outbox survives reload and keeps identities separate', async ({ page }) => {
+  await page.goto('/');
+  const sequences = await page.evaluate(async () => {
+    const { SyncOutbox } = await import('/js/sync-outbox.js');
+    const outbox = new SyncOutbox();
+    const first = await outbox.append('shopper-one', [
+      { id: 'a', items: [{ id: 'milk', quantity: 2 }], deletedItemIds: [] },
+      { id: 'b', items: [], deletedItemIds: ['milk'] }
+    ]);
+    await outbox.append('shopper-two', [
+      { id: 'c', items: [], deletedItemIds: ['bread'] }
+    ]);
+    return first.map(group => group.sequence);
+  });
+  await page.reload();
+  const [shopperOne, shopperTwo, remaining] = await page.evaluate(async firstSequence => {
+    const { SyncOutbox } = await import('/js/sync-outbox.js');
+    const outbox = new SyncOutbox();
+    const first = await outbox.list('shopper-one');
+    const second = await outbox.list('shopper-two');
+    await outbox.acknowledge(firstSequence);
+    return [first, second, await outbox.list('shopper-one')];
+  }, sequences[0]);
+  expect(shopperOne.map(group => group.id)).toEqual(['a', 'b']);
+  expect(shopperTwo.map(group => group.id)).toEqual(['c']);
+  expect(remaining.map(group => group.id)).toEqual(['b']);
+});

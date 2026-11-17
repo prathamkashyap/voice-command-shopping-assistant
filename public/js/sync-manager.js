@@ -1,5 +1,7 @@
+import { SyncOutbox } from './sync-outbox.js';
+
 const SYNC_STATE_KEY = 'voice_shopping_sync';
-const OFFLINE_QUEUE_KEY = 'voice_shopping_offline_queue';
+const MAX_BATCH_SIZE = 400;
 
 const FIREBASE_AUTH_URL = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 const FIREBASE_FIRESTORE_URL = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
@@ -49,9 +51,10 @@ function getTimestampMillis(value) {
 }
 
 export class SyncManager {
-  constructor({ loadFirestore = importFirestore, loadAuth = importAuth } = {}) {
+  constructor({ loadFirestore = importFirestore, loadAuth = importAuth, outbox = new SyncOutbox() } = {}) {
     this.loadFirestore = loadFirestore;
     this.loadAuth = loadAuth;
+    this.outbox = outbox;
     this.auth = null;
     this.db = null;
     this.userId = null;
@@ -62,6 +65,7 @@ export class SyncManager {
     // Real-time sync
     this.listener = null;
     this.listenerFailed = false;
+    this.remoteConfirmed = false;
     this.session = null;
     this.isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.syncStatusCallbacks = [];
@@ -69,7 +73,10 @@ export class SyncManager {
     
     // Offline queue
     this.offlineQueue = [];
-    this.queueFlushInProgress = false;
+    this.flushPromise = null;
+    this.pendingPersistence = new Set();
+    this.retryAfterFlush = false;
+    this.outboxFailed = false;
   }
 
   async init(shoppingList = null) {
@@ -92,8 +99,10 @@ export class SyncManager {
 
       await this.signInAnonymously(session);
       if (session.signal.aborted) return false;
+      const queue = await this.outbox.list(this.userId);
+      if (session.signal.aborted) return false;
+      this.offlineQueue = queue;
       this.enabled = true;
-      this.loadOfflineQueue();
       this.setupOnlineOfflineListeners(session.signal);
 
       if (this.isOnline) {
@@ -169,6 +178,10 @@ export class SyncManager {
     this.enabled = false;
     this.userId = null;
     this.listenerFailed = false;
+    this.outboxFailed = false;
+    this.remoteConfirmed = false;
+    this.offlineQueue = [];
+    this.pendingPersistence.clear();
     this._notifySyncStatus(this.isOnline ? 'local-only' : 'offline');
   }
 
@@ -181,34 +194,54 @@ export class SyncManager {
   }
 
   getPendingOperationCount() {
-    return this.offlineQueue.length;
+    return this.offlineQueue.length + this.pendingPersistence.size;
   }
 
-  async syncItems(localItems, deletedItemIds = []) {
+  async syncItems(items = [], deletedItemIds = []) {
     if (!this.enabled || !this.userId) return false;
+    if (!items.length && !deletedItemIds.length) return true;
 
-    // If offline, queue the operation
-    if (!this.isOnline) {
-      console.log('[SyncManager] Offline - queueing sync operation');
-      if (deletedItemIds && deletedItemIds.length > 0) {
-        for (const delId of deletedItemIds) {
-          this.queueOfflineOperation({
-            type: 'delete',
-            deletedId: delId
-          });
-        }
-      }
-      if (localItems && localItems.length > 0) {
-        for (const item of localItems) {
-          this.queueOfflineOperation({
-            type: 'update',
-            item
-          });
-        }
-      }
-      return true; // Return true to indicate operation was queued
+    const userId = this.userId;
+    const session = this.session;
+    const current = () => this.enabled && this.session === session && this.userId === userId;
+    const changes = [
+      ...items.map(item => ({ item })),
+      ...deletedItemIds.map(deletedId => ({ deletedId }))
+    ];
+    const groups = [];
+    for (let i = 0; i < changes.length; i += MAX_BATCH_SIZE) {
+      const chunk = changes.slice(i, i + MAX_BATCH_SIZE);
+      groups.push({
+        id: crypto.randomUUID(),
+        items: structuredClone(chunk.flatMap(change => change.item ? [change.item] : [])),
+        deletedItemIds: chunk.flatMap(change => change.deletedId == null ? [] : [change.deletedId])
+      });
     }
 
+    this.pendingPersistence.add(groups);
+    this._notifySyncStatus(this.isOnline ? 'syncing' : 'offline');
+    try {
+      const entries = await this.outbox.append(userId, groups);
+      if (!current()) return false;
+      for (const entry of entries) {
+        if (!this.offlineQueue.some(group => group.sequence === entry.sequence)) this.offlineQueue.push(entry);
+      }
+    } catch (error) {
+      if (current()) {
+        this.outboxFailed = true;
+        this._notifySyncStatus('error');
+        console.warn('Could not store changes for sync:', error.message);
+      }
+      return false;
+    } finally {
+      this.pendingPersistence.delete(groups);
+    }
+
+    if (this.isOnline) await this.flushOfflineQueue();
+    return true;
+  }
+
+  async publishItems(localItems, deletedItemIds) {
     if (this.syncInProgress) return false;
     this.syncInProgress = true;
     const session = this.session;
@@ -260,10 +293,10 @@ export class SyncManager {
       }
 
       await batch.commit();
-      if (!current()) return false;
-      this.lastSyncTime = Date.now();
-      this.saveSyncState();
-      this._notifySyncStatus(this.isOnline ? (this.offlineQueue.length ? 'syncing' : 'synced') : 'offline');
+      if (current()) {
+        this.lastSyncTime = Date.now();
+        this.saveSyncState();
+      }
       return true;
     } catch (error) {
       if (!current()) return false;
@@ -446,7 +479,7 @@ export class SyncManager {
    * Notify all registered callbacks of sync status change
    */
   _notifySyncStatus(status) {
-    this.syncStatus = this.listenerFailed && (status === 'syncing' || status === 'synced')
+    this.syncStatus = (this.listenerFailed || this.outboxFailed) && (status === 'syncing' || status === 'synced')
       ? 'error'
       : status;
     this.syncStatusCallbacks.forEach(cb => cb(this.syncStatus));
@@ -473,6 +506,7 @@ export class SyncManager {
   handleOffline() {
     if (!this.isOnline) return; // Already offline
     this.isOnline = false;
+    this.remoteConfirmed = false;
     console.log('[SyncManager] Offline - queuing writes locally');
     this._notifySyncStatus('offline');
     this.stopRealtimeListener();
@@ -507,7 +541,7 @@ export class SyncManager {
       const { collection, onSnapshot } = await this.loadFirestore();
       if (!current()) return false;
       const itemsRef = collection(listener.db, 'users', listener.uid, 'shoppingList');
-      const unsubscribe = onSnapshot(itemsRef, snapshot => {
+      const unsubscribe = onSnapshot(itemsRef, { includeMetadataChanges: true }, snapshot => {
         if (!current()) return;
         const remoteItems = [];
         snapshot.forEach(doc => {
@@ -516,8 +550,8 @@ export class SyncManager {
           remoteItems.push({ ...data, id: doc.id, _updatedAtMillis: millis, updatedAt: millis ?? Date.now() });
         });
         this.handleRemoteChanges(remoteItems);
-        if (!snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites &&
-            !this.syncInProgress && !this.offlineQueue.length) {
+        this.remoteConfirmed = !snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites;
+        if (this.remoteConfirmed && !this.syncInProgress && this.getPendingOperationCount() === 0) {
           this.listenerFailed = false;
           this._notifySyncStatus('synced');
         }
@@ -572,97 +606,54 @@ export class SyncManager {
     }
   }
 
-  /**
-   * Offline queue management
-   */
-  loadOfflineQueue() {
-    try {
-      const stored = localStorage.getItem(OFFLINE_QUEUE_KEY);
-      if (stored) {
-        this.offlineQueue = JSON.parse(stored);
-        console.log('[SyncManager] Loaded offline queue:', this.offlineQueue.length, 'operations');
-      }
-    } catch (e) {
-      console.warn('Failed to load offline queue:', e);
-      this.offlineQueue = [];
-    }
-  }
-
-  saveOfflineQueue() {
-    try {
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(this.offlineQueue));
-    } catch (e) {
-      console.warn('Failed to save offline queue:', e);
-    }
-  }
-
-  /**
-   * Add operation to offline queue
-   */
-  queueOfflineOperation(operation) {
-    this.offlineQueue.push({
-      ...operation,
-      timestamp: Date.now(),
-      id: crypto.randomUUID()
-    });
-    this.saveOfflineQueue();
-    console.log('[SyncManager] Queued offline operation:', operation.type);
-  }
-
-  /**
-   * Flush offline queue to Firestore
-   */
   async flushOfflineQueue() {
-    if (!this.enabled || !this.isOnline || this.queueFlushInProgress || this.offlineQueue.length === 0) {
-      return;
+    if (!this.enabled || !this.userId || !this.isOnline) return false;
+    if (this.flushPromise) {
+      this.retryAfterFlush = true;
+      return this.flushPromise;
     }
 
-    this.queueFlushInProgress = true;
-    console.log('[SyncManager] Flushing offline queue:', this.offlineQueue.length, 'operations');
-
-    const queue = this.offlineQueue;
-    const session = this.session;
     const userId = this.userId;
-    const current = () => this.enabled && this.session === session &&
-      this.userId === userId && this.offlineQueue === queue;
-
-    try {
-      while (current() && this.isOnline && queue.length > 0) {
-        const operation = queue[0];
-        const acknowledged = await this.executeOfflineOperation(operation);
-        if (!current()) return;
-        if (!acknowledged) {
-          if (this.isOnline) this._notifySyncStatus('error');
-          return;
+    const session = this.session;
+    const current = () => this.enabled && this.session === session && this.userId === userId && this.isOnline;
+    this.flushPromise = Promise.resolve()
+      .then(() => this.outbox.withSender(userId, () => this.drainOutbox(userId, current)))
+      .catch(error => {
+        if (current()) {
+          console.warn('Could not replay pending changes:', error.message);
+          this._notifySyncStatus('error');
         }
-        queue.shift();
-        this.saveOfflineQueue();
-      }
-      if (current() && this.isOnline && queue.length === 0) this._notifySyncStatus('synced');
-    } catch (error) {
-      if (current()) {
-        console.warn('Failed to execute offline operation:', error.message);
-        this._notifySyncStatus('error');
-      }
+        return false;
+      });
+    let drained = false;
+    try {
+      drained = await this.flushPromise;
+      return drained;
     } finally {
-      this.queueFlushInProgress = false;
+      this.flushPromise = null;
+      const retry = this.retryAfterFlush;
+      this.retryAfterFlush = false;
+      if (retry && (drained || !current())) this.flushOfflineQueue();
     }
   }
 
-  async executeOfflineOperation(operation) {
-    const { type, item, deletedId, itemIds } = operation;
-    
-    switch (type) {
-      case 'add':
-      case 'update':
-        return this.syncItems([item]);
-      case 'delete':
-        return this.syncItems([], [deletedId]);
-      case 'clear':
-        return this.syncItems([], itemIds);
-      default:
-        return false;
+  async drainOutbox(userId, current) {
+    while (current()) {
+      const queue = await this.outbox.list(userId);
+      if (!current()) return false;
+      this.offlineQueue = queue;
+      if (!queue.length) {
+        if (!this.pendingPersistence.size && this.remoteConfirmed) this._notifySyncStatus('synced');
+        return true;
+      }
+      const group = queue[0];
+      if (!await this.publishItems(group.items, group.deletedItemIds)) return false;
+      // The ID is unique across tabs within this browser database. Finish recording
+      // the server acknowledgment for this owner even if auth changed in the meantime.
+      await this.outbox.acknowledge(group.sequence);
+      if (current()) this.offlineQueue = this.offlineQueue.filter(entry => entry.sequence !== group.sequence);
     }
+    return false;
   }
 }
 

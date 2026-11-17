@@ -30,4 +30,8 @@ New readers initially accept old documents with a baseline revision. In emulator
 | User switches accounts with pending work | Previous queue is retained and never submitted as the new user |
 | Browser storage write fails | No saved confirmation and the last durable projection remains recoverable |
 
-The legacy queue repair can protect unacknowledged work while this design is implemented. It does not supply transactional storage, receipts, or account migration.
+## Implementation status
+
+Authenticated mutations now go to an IndexedDB outbox keyed by Firebase UID before transport. The sender removes a group after Firestore acknowledges it. Web Locks serializes drain work across tabs where supported. Each tab serializes its own work in browsers without Web Locks.
+
+The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. The new sender only reads the current UID's entries. Migration needs a way for the user to review those legacy records and choose where they belong. The list projection still uses its original local-storage key. A shared transaction for the projection and outbox, revision checks, and server-side replay receipts are subsequent steps.

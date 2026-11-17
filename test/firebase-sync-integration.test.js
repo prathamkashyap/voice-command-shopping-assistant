@@ -14,7 +14,20 @@ test('Firestore listener receives changes across two sessions with the same iden
   const reader = initializeApp(config, 'reader');
   const outsider = initializeApp(config, 'outsider');
   const connections = [];
-  const sync = new SyncManager({ loadFirestore: async () => firestore });
+  let queue = [];
+  const sync = new SyncManager({
+    loadFirestore: async () => firestore,
+    outbox: {
+      async append(_owner, groups) {
+        const entries = groups.map(group => ({ ...group, sequence: group.id }));
+        queue.push(...entries);
+        return entries;
+      },
+      async list() { return [...queue]; },
+      async acknowledge(sequence) { queue = queue.filter(group => group.sequence !== sequence); },
+      withSender(_owner, send) { return send(); }
+    }
+  });
   let timer;
   try {
     const email = 'shopper@example.test';
