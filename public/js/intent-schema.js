@@ -14,6 +14,19 @@ export const IntentSchema = {
         required: ['item']
       }
     },
+    operations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['add', 'remove', 'modify'] },
+          item: { type: 'string' },
+          quantity: { type: ['number', 'null'] },
+          unit: { type: ['string', 'null'] }
+        },
+        required: ['action', 'item']
+      }
+    },
     searchFilters: {
       type: 'object',
       properties: {
@@ -31,19 +44,59 @@ export const IntentSchema = {
   required: ['action', 'originalText']
 };
 
-export function createIntent({ action, items = [], searchFilters = null, originalText, source = 'rule', confidence = 1.0 }) {
+const ITEM_ACTIONS = new Set(['add', 'remove', 'modify']);
+
+export function createIntent({ action, items = [], operations = null, searchFilters = null, originalText, source = 'rule', confidence = 1.0 }) {
+  const normalizedItems = items.map(item => ({
+    item: String(item.item || '').trim(),
+    quantity: typeof item.quantity === 'number' ? item.quantity : 1,
+    unit: item.unit ? String(item.unit).toLowerCase() : null
+  })).filter(item => item.item);
+
+  const normalizedOperations = Array.isArray(operations)
+    ? operations.map(operation => {
+        const operationAction = ITEM_ACTIONS.has(operation.action) ? operation.action : null;
+        if (!operationAction) {
+          throw new Error(`Invalid multi operation action: ${operation.action}`);
+        }
+        return {
+          action: operationAction,
+          item: String(operation.item || '').trim(),
+          quantity: typeof operation.quantity === 'number' ? operation.quantity : 1,
+          unit: operation.unit ? String(operation.unit).toLowerCase() : null
+        };
+      }).filter(operation => operation.item)
+    : null;
+
   const intent = {
     action,
-    items: items.map(item => ({
-      item: String(item.item || '').trim(),
-      quantity: typeof item.quantity === 'number' ? item.quantity : 1,
-      unit: item.unit ? String(item.unit).toLowerCase() : null
-    })).filter(item => item.item),
+    items: normalizedItems,
+    operations: normalizedOperations,
     searchFilters,
     originalText,
     source,
     confidence
   };
+
+  if (action === 'multi') {
+    if (normalizedOperations && normalizedOperations.length > 0) {
+      intent.items = normalizedOperations.map(({ action: _operationAction, ...item }) => item);
+    } else if (normalizedOperations !== null) {
+      throw new Error('Intent multi requires at least one operation');
+    } else {
+      intent.operations = normalizedItems.map(item => ({ action: 'add', ...item }));
+    }
+
+    if (intent.items.length === 0 || intent.operations.length === 0) {
+      throw new Error('Intent multi requires at least one item');
+    }
+  } else {
+    intent.operations = null;
+  }
+
+  if (ITEM_ACTIONS.has(action) && normalizedItems.length === 0) {
+    throw new Error(`Intent ${action} requires at least one item`);
+  }
 
   if (action === 'search' && searchFilters) {
     intent.searchFilters = {
@@ -53,10 +106,6 @@ export function createIntent({ action, items = [], searchFilters = null, origina
       isOrganic: searchFilters.isOrganic ?? false,
       category: searchFilters.category ?? null
     };
-  }
-
-  if ((action === 'add' || action === 'remove' || action === 'modify') && intent.items.length === 0) {
-    throw new Error(`Intent ${action} requires at least one item`);
   }
 
   return intent;

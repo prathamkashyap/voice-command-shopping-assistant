@@ -30,6 +30,9 @@ Return ONLY valid JSON matching this schema:
   "items": [
     { "item": "string", "quantity": number|null, "unit": "string|null" }
   ],
+  "operations": [
+    { "action": "add|remove|modify", "item": "string", "quantity": number|null, "unit": "string|null" }
+  ],
   "searchFilters": {
     "query": "string",
     "maxPrice": number|null,
@@ -39,12 +42,14 @@ Return ONLY valid JSON matching this schema:
   }
 }
 
+For action "multi", include "operations" with the correct action for each item, and keep "items" as the flattened item list.
+
 Examples:
 User: "Add 2 bottles of milk"
 {"action":"add","items":[{"item":"milk","quantity":2,"unit":"bottles"}],"searchFilters":null}
 
 User: "Remove milk and add bread"
-{"action":"multi","items":[{"item":"milk","quantity":1,"unit":null},{"item":"bread","quantity":1,"unit":null}],"searchFilters":null}
+{"action":"multi","items":[{"item":"milk","quantity":1,"unit":null},{"item":"bread","quantity":1,"unit":null}],"operations":[{"action":"remove","item":"milk","quantity":1,"unit":null},{"action":"add","item":"bread","quantity":1,"unit":null}],"searchFilters":null}
 
 User: "Find organic tomatoes under $5"
 {"action":"search","items":[],"searchFilters":{"query":"tomatoes","maxPrice":5,"brand":null,"isOrganic":true,"category":null}}
@@ -95,19 +100,41 @@ function validateIntentSchema(parsed) {
     return;
   }
 
-  if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+  const hasItems = Array.isArray(parsed.items) && parsed.items.length > 0;
+  const hasOperations = Array.isArray(parsed.operations) && parsed.operations.length > 0;
+
+  if (parsed.action === 'multi') {
+    if (!hasItems && !hasOperations) {
+      throw new Error('Multi requires items or operations');
+    }
+  } else if (!hasItems) {
     throw new Error('Non-search actions require at least one item');
   }
 
-  for (const item of parsed.items) {
+  const validateItemShape = (item, label) => {
     if (!item.item || typeof item.item !== 'string') {
-      throw new Error('Each item must have a string item name');
+      throw new Error(`Each ${label} must have a string item name`);
     }
     if (item.quantity !== null && item.quantity !== undefined && typeof item.quantity !== 'number') {
-      throw new Error('Item quantity must be a number or null');
+      throw new Error(`${label} quantity must be a number or null`);
     }
     if (item.unit !== null && item.unit !== undefined && typeof item.unit !== 'string') {
-      throw new Error('Item unit must be a string or null');
+      throw new Error(`${label} unit must be a string or null`);
+    }
+  };
+
+  if (hasItems) {
+    for (const item of parsed.items) {
+      validateItemShape(item, 'item');
+    }
+  }
+
+  if (hasOperations) {
+    for (const operation of parsed.operations) {
+      if (!operation.action || !['add', 'remove', 'modify'].includes(operation.action)) {
+        throw new Error('Each operation must have action add, remove, or modify');
+      }
+      validateItemShape(operation, 'operation');
     }
   }
 }
@@ -138,151 +165,6 @@ async function callAnthropic(client, model, prompt) {
   return textBlock ? textBlock.text : '';
 }
 
-// Mock LLM parser for local development (no API key required)
-function mockParseIntent(text) {
-  const lower = text.toLowerCase().trim();
-
-  // Search with filters: "find organic tomatoes under $5"
-  const searchMatch = lower.match(/^(?:find|search|look for|show me)\s+(.+)$/i);
-  if (searchMatch) {
-    let query = searchMatch[1];
-    const filters = { query: '', maxPrice: null, brand: null, isOrganic: false, category: null };
-
-    // Extract price filter
-    const priceMatch = query.match(/(?:under|below|less than|cheaper than)\s*\$?(\d+(?:\.\d+)?)/i);
-    if (priceMatch) {
-      filters.maxPrice = parseFloat(priceMatch[1]);
-      query = query.replace(/(?:under|below|less than|cheaper than)\s*\$?(\d+(?:\.\d+)?)/i, '').trim();
-    }
-
-    // Extract organic
-    if (/\b(organic|bio)\b/i.test(query)) {
-      filters.isOrganic = true;
-      query = query.replace(/\b(organic|bio)\b/i, '').trim();
-    }
-
-    // Extract brand
-    const brandMatch = query.match(/\b(?:brand|by)\s+([a-zA-Z]+)/i);
-    if (brandMatch) {
-      filters.brand = brandMatch[1];
-      query = query.replace(/\b(?:brand|by)\s+([a-zA-Z]+)/i, '').trim();
-    }
-
-    // Clean up query
-    filters.query = query.replace(/\b(me|for|some|any)\b/gi, '').trim();
-
-    return {
-      action: 'search',
-      items: [],
-      searchFilters: filters
-    };
-  }
-
-  // Multi-item: "add milk and bread", "buy apples, bananas, and bread", "get milk and 2 bottles of water", "I need milk and bread"
-  const multiMatch = lower.match(/^(?:add|buy|get|i need|i want)\s+(.+)$/i);
-  if (multiMatch) {
-    const itemsText = multiMatch[1];
-    // Split by "and" or "," - handle "X, Y, and Z" pattern
-    const parts = itemsText.split(/\s*(?:,|and)\s*/i);
-
-    // Filter out empty parts
-    const validParts = parts.filter(p => p.trim() && !/^(?:and|or|with|plus)$/i.test(p.trim()));
-
-    if (validParts.length > 1) {
-      const items = [];
-      for (const part of validParts) {
-        // Extract quantity and unit if present (e.g., "2 bottles of water")
-        const qtyMatch = part.match(/^(\d+(?:\.\d+)?)\s+(\w+)\s+(.+)$/);
-        if (qtyMatch) {
-          items.push({
-            item: qtyMatch[3].trim(),
-            quantity: parseFloat(qtyMatch[1]),
-            unit: qtyMatch[2].toLowerCase()
-          });
-        } else {
-          // Check for word quantities like "a couple of apples"
-          const wordQtyMatch = part.match(/^(?:a|an)\s+(\w+)\s+(.+)$/i);
-          if (wordQtyMatch) {
-            const qtyWords = { 'couple': 2, 'few': 3, 'several': 4, 'dozen': 12 };
-            items.push({
-              item: wordQtyMatch[2].trim(),
-              quantity: qtyWords[wordQtyMatch[1].toLowerCase()] || 1,
-              unit: null
-            });
-          } else {
-            items.push({ item: part.trim(), quantity: 1, unit: null });
-          }
-        }
-      }
-
-      if (items.length > 1) {
-        return {
-          action: 'multi',
-          items,
-          searchFilters: null
-        };
-      }
-    }
-  }
-
-  // Single item commands
-  // "add 2 bottles of milk"
-  const addMatch = lower.match(/^(?:add|buy|get)\s+(.+)$/i);
-  if (addMatch) {
-    const itemText = addMatch[1];
-    // Handle "2 bottles of milk" or "2 bottles milk" or "2 milk"
-    const qtyMatch = itemText.match(/^(\d+(?:\.\d+)?)\s+(\w+)(?:\s+of)?\s+(.+)$/);
-    if (qtyMatch) {
-      return {
-        action: 'add',
-        items: [{
-          item: qtyMatch[3].trim(),
-          quantity: parseFloat(qtyMatch[1]),
-          unit: qtyMatch[2].toLowerCase()
-        }],
-        searchFilters: null
-      };
-    }
-    // "add milk"
-    return {
-      action: 'add',
-      items: [{ item: itemText.trim(), quantity: 1, unit: null }],
-      searchFilters: null
-    };
-  }
-
-  // "change milk to 3 liters" / "modify milk to 2 bottles"
-  const modifyMatch = lower.match(/^(?:change|modify|update|set)\s+(.+)\s+to\s+(\d+(?:\.\d+)?)\s*(\w*)$/i);
-  if (modifyMatch) {
-    return {
-      action: 'modify',
-      items: [{
-        item: modifyMatch[1].trim(),
-        quantity: parseFloat(modifyMatch[2]),
-        unit: modifyMatch[3] ? modifyMatch[3].toLowerCase() : null
-      }],
-      searchFilters: null
-    };
-  }
-
-  // "remove milk"
-  const removeMatch = lower.match(/^(?:remove|delete|take out|drop)\s+(.+)$/i);
-  if (removeMatch) {
-    return {
-      action: 'remove',
-      items: [{ item: removeMatch[1].trim(), quantity: 1, unit: null }],
-      searchFilters: null
-    };
-  }
-
-  // Default fallback
-  return {
-    action: 'add',
-    items: [{ item: text.trim(), quantity: 1, unit: null }],
-    searchFilters: null
-  };
-}
-
 exports.parseIntent = onRequest(
   {
     cors: true,
@@ -299,9 +181,10 @@ exports.parseIntent = onRequest(
       return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Use POST' });
     }
 
-    const { text, locale } = req.body;
+    const { text, locale } = req.body ?? {};
+    const mockMode = process.env.FUNCTIONS_EMULATOR === 'true' || process.env.MOCK_LLM === 'true';
 
-    if (!text || typeof text !== 'string') {
+    if (typeof text !== 'string' || !text.trim() || text.length > 1000) {
       logger.warn({ requestId, event: 'parse_intent_error', error: 'INVALID_REQUEST', latencyMs: Date.now() - startTime });
       return res.status(400).json({ error: 'INVALID_REQUEST', message: 'Missing or invalid text field' });
     }
@@ -311,15 +194,20 @@ exports.parseIntent = onRequest(
       event: 'parse_intent_start',
       textLength: text.length,
       locale: locale || 'en-US',
-      mockMode: process.env.MOCK_LLM === 'true'
+      mockMode
     });
 
     try {
       let parsed;
 
-      // Use mock LLM when MOCK_LLM=true (local development)
-      if (process.env.MOCK_LLM === 'true') {
-        parsed = mockParseIntent(text);
+      if (mockMode) {
+        const { CommandParser } = await import('./command-parser.mjs');
+        const parser = new CommandParser();
+        try {
+          parsed = parser.parseIntent(text);
+        } catch (error) {
+          return res.status(400).json({ error: 'CLARIFICATION_REQUIRED', message: error.message });
+        }
       } else {
         const { provider, model, client } = getLLMClient();
         const prompt = text;
@@ -349,7 +237,7 @@ exports.parseIntent = onRequest(
       const intent = {
         ...parsed,
         originalText: text,
-        source: 'llm',
+        source: mockMode ? 'rule' : 'llm',
         confidence: parsed.confidence ?? 0.85
       };
 
@@ -359,8 +247,8 @@ exports.parseIntent = onRequest(
         latencyMs: Date.now() - startTime,
         action: intent.action,
         itemCount: intent.items?.length || 0,
-        provider: process.env.MOCK_LLM === 'true' ? 'mock' : (process.env.LLM_PROVIDER || 'openai'),
-        model: process.env.MOCK_LLM === 'true' ? 'local-mock' : (process.env.LLM_MODEL || 'gpt-4o-mini')
+        provider: mockMode ? 'mock' : (process.env.LLM_PROVIDER || 'openai'),
+        model: mockMode ? 'local-rules' : (process.env.LLM_MODEL || 'gpt-4o-mini')
       });
 
       return res.json({ intent });
@@ -377,5 +265,38 @@ exports.parseIntent = onRequest(
 
       return res.status(500).json({ error: 'UNAVAILABLE', message: 'LLM service temporarily unavailable' });
     }
+  }
+);
+
+exports.logErrors = onRequest(
+  {
+    cors: true,
+    maxInstances: 5,
+    timeoutSeconds: 5,
+    invoker: 'public'
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Use POST' });
+    }
+
+    const errors = Array.isArray(req.body?.errors) ? req.body.errors.slice(0, 50) : [];
+    if (errors.length === 0) {
+      return res.status(400).json({ error: 'INVALID_REQUEST', message: 'Missing errors array' });
+    }
+
+    logger.warn({
+      event: 'client_errors_received',
+      count: errors.length,
+      sessionId: typeof req.body?.sessionId === 'string' ? req.body.sessionId : null,
+      userId: typeof req.body?.userId === 'string' ? req.body.userId : null,
+      errors: errors.map(error => ({
+        message: String(error?.message || error || '').slice(0, 500),
+        name: error?.name ? String(error.name).slice(0, 100) : null,
+        timestamp: error?.timestamp || null
+      }))
+    });
+
+    return res.status(204).end();
   }
 );

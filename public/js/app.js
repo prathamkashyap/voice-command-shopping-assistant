@@ -5,16 +5,18 @@ import { ProductCatalog } from './product-catalog.js';
 import { RecommendationEngine } from './recommendation-engine.js';
 import { UI } from './ui.js';
 import { syncManager } from './sync-manager.js';
-import { errorTracker, captureException, captureMessage } from './error-tracker.js';
+import { getRuntimeMode, initializeFirebase } from './firebase-bootstrap.js';
 
 class App {
   constructor() {
+    this.runtimeMode = getRuntimeMode();
+    this.errorTracker = null;
     this.syncManager = syncManager;
     this.shoppingList = new ShoppingList(this.syncManager);
     this.productCatalog = new ProductCatalog();
     this.recommendationEngine = new RecommendationEngine(this.shoppingList, this.productCatalog);
     this.intentParser = new HybridIntentParser(this.productCatalog, {
-      useMockLLM: false,
+      useMockLLM: this.runtimeMode !== 'cloud',
       llmEnabled: true,
       fallbackToLLM: true,
       apiEndpoint: '/api/parse-intent'
@@ -45,12 +47,12 @@ class App {
       }
     });
     
-    // Initialize error tracking
-    this.initErrorTracking();
     this.init();
   }
 
-  initErrorTracking() {
+  async initErrorTracking() {
+    const { errorTracker } = await import('./error-tracker.js');
+    this.errorTracker = errorTracker;
     errorTracker.setUserId(this.syncManager.getUserId() || 'anonymous');
     
     const originalError = console.error;
@@ -58,13 +60,9 @@ class App {
       originalError.apply(console, args);
       const error = args.find(arg => arg instanceof Error);
       if (error) {
-        captureException(error, { source: 'console.error' });
+        this.errorTracker.captureException(error, { source: 'console.error' });
       }
     };
-    
-    window.addEventListener('unhandledrejection', (event) => {
-      captureException(event.reason, { type: 'unhandled_rejection' });
-    });
   }
 
   async init() {
@@ -77,49 +75,68 @@ class App {
     this.shoppingList.load();
     this.ui.render();
     this.setupEventListeners();
-    this.updateSuggestions();
+    this.ui.updateTTSToggleUI(this.ttsEnabled);
+    if (new URLSearchParams(window.location.search).get('action') === 'add') {
+      document.getElementById('textCommand')?.focus();
+    }
+    this.registerServiceWorker();
+    if (this.runtimeMode === 'cloud') {
+      this.initErrorTracking().catch(error => console.warn('Diagnostics unavailable:', error.message));
+    }
     this.initializeSync();
   }
 
   async initializeSync() {
+    if (this.runtimeMode === 'local') {
+      this.ui.setSyncStatus('local-only');
+      return;
+    }
+    this.ui.setSyncStatus('connecting');
     try {
-      await this.syncManager.init();
-      if (this.syncManager.isEnabled()) {
-        errorTracker.setUserId(this.syncManager.getUserId());
-        await this.syncManager.initialSync(this.shoppingList);
+      await initializeFirebase(this.runtimeMode);
+      await this.syncManager.init(this.shoppingList);
+      if (!this.syncManager.isEnabled()) {
+        this.ui.setSyncStatus(this.syncManager.syncStatus);
+        return;
       }
-      
+      this.errorTracker?.setUserId(this.syncManager.getUserId());
+
+      let previousSyncStatus = null;
       this.syncManager.onSyncStatusChange((status) => {
         this.ui.setSyncStatus(status);
+        if (status === previousSyncStatus) return;
+        if (status === 'offline') {
+          this.ui.showToast('Offline. Cloud sync resumes when you reconnect.', 'warning');
+        } else if (status === 'storage-error') {
+          this.ui.showToast('Some changes could not be saved. Export the list before closing this tab.', 'warning');
+        }
+        previousSyncStatus = status;
       });
     } catch (error) {
-      captureException(error, { source: 'initializeSync' });
+      this.ui.setSyncStatus('local-only');
+      this.errorTracker?.captureException(error, { source: 'initializeSync' });
       console.warn('Sync initialization failed:', error.message);
     }
-    
-    this.registerServiceWorker();
   }
 
   async registerServiceWorker() {
     if ('serviceWorker' in navigator) {
       try {
-        const registration = await navigator.serviceWorker.register('/sw.js');
+        const registration = await navigator.serviceWorker.register('/sw.js', {
+          type: 'module',
+          updateViaCache: 'none'
+        });
         console.log('[App] Service Worker registered:', registration.scope);
         
         registration.addEventListener('updatefound', () => {
           const newWorker = registration.installing;
           newWorker?.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              this.ui.showToast('New version available! Refresh to update.', 'info');
+              this.ui.showToast('Update ready. Close all shopping tabs, then reopen the app.', 'info');
             }
           });
         });
         
-        navigator.serviceWorker.addEventListener('message', (event) => {
-          if (event.data && event.data.type === 'SYNC_COMPLETE') {
-            this.ui.showToast('Sync completed', 'success');
-          }
-        });
       } catch (error) {
         console.warn('[App] Service Worker registration failed:', error);
       }
@@ -160,6 +177,7 @@ class App {
       if (e.key === 'Enter') this.handleTextCommand();
     });
     document.getElementById('clearList')?.addEventListener('click', () => this.clearList());
+    document.getElementById('clearCompleted')?.addEventListener('click', () => this.clearCompleted());
     document.getElementById('closeSearch')?.addEventListener('click', () => this.ui.hideSearchResults());
     document.getElementById('language')?.addEventListener('change', (e) => {
       this.voiceRecognition.setLanguage(e.target.value);
@@ -171,6 +189,9 @@ class App {
         const text = chip.dataset.prompt || chip.textContent.trim();
         const input = document.getElementById('textCommand');
         if (input) input.value = text;
+        chip.classList.add('is-active');
+        setTimeout(() => chip.classList.remove('is-active'), 450);
+        chip.blur();
         this.processCommand(text);
       });
     });
@@ -185,6 +206,14 @@ class App {
     document.getElementById('archModalToggle')?.addEventListener('click', () => this.ui.toggleArchModal(true));
     // Export Modal toggle
     document.getElementById('exportListBtn')?.addEventListener('click', () => this.ui.toggleExportModal(true));
+    document.getElementById('closeInspector')?.addEventListener('click', () => this.ui.toggleInspector(false));
+    document.getElementById('closeArchModal')?.addEventListener('click', () => this.ui.toggleArchModal(false));
+    document.getElementById('closeExportModal')?.addEventListener('click', () => this.ui.toggleExportModal(false));
+    document.getElementById('copyTextBtn')?.addEventListener('click', () => this.copyList('text'));
+    document.getElementById('copyMarkdownBtn')?.addEventListener('click', () => this.copyList('markdown'));
+    document.getElementById('shareListBtn')?.addEventListener('click', () => this.shareList());
+    document.getElementById('copyCsvBtn')?.addEventListener('click', () => this.copyCSV());
+    document.getElementById('downloadCsvBtn')?.addEventListener('click', () => this.downloadCSV());
     
     // Category tabs delegation
     document.getElementById('categoryFilters')?.addEventListener('click', (e) => {
@@ -198,6 +227,24 @@ class App {
     document.getElementById('itemSearchInput')?.addEventListener('input', (e) => {
       this.itemSearchQuery = e.target.value.toLowerCase().trim();
       this.ui.renderShoppingList();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      const target = e.target;
+      const isEditing = target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]');
+      if (isEditing) return;
+
+      if (e.key === '/') {
+        e.preventDefault();
+        document.getElementById('itemSearchInput')?.focus();
+      } else if (e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        this.toggleVoiceInput();
+      } else if (e.key === 'Escape') {
+        this.ui.toggleInspector(false);
+        this.ui.toggleArchModal(false);
+        this.ui.toggleExportModal(false);
+      }
     });
   }
 
@@ -230,6 +277,11 @@ class App {
     this.ui.showRecognizedText(text, true);
     this.ui.setStatus('processing');
 
+    if (this.handleMetaCommand(text)) {
+      this.ui.setStatus('success');
+      return;
+    }
+
     try {
       const locale = document.getElementById('language')?.value || 'en-US';
       const intent = await this.intentParser.parse(text, locale);
@@ -239,14 +291,67 @@ class App {
       await this.executeIntent(intent);
       this.ui.setStatus('success');
     } catch (error) {
-      captureException(error, { 
+      this.errorTracker?.captureException(error, {
         source: 'processCommand', 
-        command: text 
+        commandLength: text.length
       });
       this.ui.setStatus('error');
       this.ui.showToast(error.message, 'error');
       this.speak("I couldn't process that command.");
     }
+  }
+
+  handleMetaCommand(text) {
+    const command = text.toLowerCase().trim();
+    const say = (message, type = 'info') => {
+      this.ui.showToast(message, type);
+      this.speak(message);
+    };
+
+    if (/^(?:undo|restore|bring back)\b/.test(command)) {
+      if (this.shoppingList.undo()) {
+        this.ui.renderShoppingList();
+        this.updateSuggestions();
+        say('Undo complete', 'success');
+      } else {
+        say('Nothing to undo', 'warning');
+      }
+      return true;
+    }
+
+    if (/^(?:clear|remove)\s+(?:all\s+)?(?:completed|done|checked)\b/.test(command)) {
+      this.clearCompleted();
+      return true;
+    }
+
+    if (/^(?:clear|empty)\s+(?:all|everything|the\s+list|list)\b/.test(command)) {
+      this.clearList();
+      return true;
+    }
+
+    if (/^(?:what'?s|what is|show|calculate)?\s*(?:the\s+)?(?:total|cost|estimate|budget)\b/.test(command)) {
+      const total = this.shoppingList.getEstimatedTotal(this.productCatalog);
+      say(`Estimated total is $${total.toFixed(2)}`, 'success');
+      return true;
+    }
+
+    if (/^(?:help|commands|what can you do)\b/.test(command)) {
+      say('Try: add 2 milk, remove bread, find organic under $5, total, undo, clear done', 'info');
+      return true;
+    }
+
+    if (/^(?:read|what'?s on|show|list)\b.*\blist\b/.test(command)) {
+      const items = this.shoppingList.getAll();
+      if (items.length === 0) {
+        say('Your shopping list is empty', 'info');
+      } else {
+        const names = items.slice(0, 8).map(item => `${item.quantity} ${item.unit} ${item.name}`).join(', ');
+        say(`You have ${items.length} items: ${names}${items.length > 8 ? ', and more' : ''}`, 'info');
+      }
+      return true;
+    }
+
+    return false;
   }
 
   async executeIntent(intent) {
@@ -261,12 +366,16 @@ class App {
           if (phrase) speechPhrases.push(phrase);
         }
         break;
-      case 'multi':
-        for (const item of intent.items) {
-          const phrase = await this.executeSingleItemCommand('add', item);
+      case 'multi': {
+        const operations = Array.isArray(intent.operations) && intent.operations.length > 0
+          ? intent.operations
+          : intent.items.map(item => ({ action: 'add', ...item }));
+        for (const operation of operations) {
+          const phrase = await this.executeSingleItemCommand(operation.action || 'add', operation);
           if (phrase) speechPhrases.push(phrase);
         }
         break;
+      }
       case 'search':
         await this.searchProducts(intent.searchFilters);
         speechPhrases.push(`Found search results for ${intent.searchFilters.query || 'products'}`);
@@ -383,6 +492,69 @@ class App {
   updateSuggestions() {
     const suggestions = this.recommendationEngine.getSuggestions();
     this.ui.renderSuggestions(suggestions);
+  }
+
+  async copyList(format) {
+    const markdown = format === 'markdown';
+    const text = markdown ? this.shoppingList.exportAsMarkdown() : this.shoppingList.exportAsText();
+    try {
+      await navigator.clipboard.writeText(text);
+      this.ui.showToast(markdown ? 'Copied Markdown!' : 'Copied to clipboard!', 'success');
+    } catch {
+      this.ui.showToast('Clipboard unavailable. Select the preview text to copy it.', 'warning');
+    }
+  }
+
+  async shareList() {
+    if (!navigator.share) return this.copyList('text');
+    try {
+      await navigator.share({ title: 'My Shopping List', text: this.shoppingList.exportAsText() });
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        this.ui.showToast('Sharing unavailable. Copy the list instead.', 'warning');
+      }
+    }
+  }
+
+  async copyCSV() {
+    const csv = this.shoppingList.exportAsCSV();
+    if (!csv) {
+      this.ui.showToast('Nothing to export', 'warning');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(csv);
+      this.ui.showToast('CSV copied to clipboard', 'success');
+    } catch {
+      this.ui.showToast('Clipboard unavailable — use Download CSV', 'warning');
+    }
+  }
+
+  downloadCSV() {
+    const csv = this.shoppingList.exportAsCSV();
+    if (!csv) {
+      this.ui.showToast('Nothing to export', 'warning');
+      return;
+    }
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'shopping-list.csv';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    this.ui.showToast('CSV downloaded', 'success');
+  }
+
+  clearCompleted() {
+    const removedIds = this.shoppingList.clearCompleted();
+    if (removedIds.length === 0) return;
+
+    this.ui.renderShoppingList();
+    this.updateSuggestions();
+    const message = `Cleared ${removedIds.length} completed item${removedIds.length === 1 ? '' : 's'}`;
+    this.ui.showToast(message, 'info');
+    this.speak(message);
   }
 
   clearList() {

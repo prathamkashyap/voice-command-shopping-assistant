@@ -4,16 +4,28 @@
   "description": "Voice-based shopping list manager with smart suggestions",
   "type": "module",
   "scripts": {
-    "dev": "npx serve public -l 3000",
-    "dev:functions": "firebase emulators:start --only functions,hosting",
-    "build": "echo 'No build step required'",
+    "dev": "serve public -l 3000",
+    "dev:functions": "node scripts/local-emulators.mjs start",
     "deploy": "firebase deploy",
     "test": "node --test test",
-    "test:integration": "FUNCTIONS_EMULATOR_URL=http://localhost:5001/voice-shopping-assistant-app/us-central1 node --test test/llm-integration.test.js"
+    "lint": "eslint public functions/index.js functions/command-parser.mjs scripts test e2e playwright.config.js",
+    "test:integration": "node scripts/local-emulators.mjs integration",
+    "test:browser": "playwright test",
+    "test:local": "node scripts/local-emulators.mjs all"
   },
-  "keywords": ["voice", "shopping", "assistant", "speech-recognition"],
+  "keywords": [
+    "voice",
+    "shopping",
+    "assistant",
+    "speech-recognition"
+  ],
   "license": "MIT",
   "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "eslint": "9.39.4",
+    "firebase": "10.12.2",
+    "firebase-tools": "15.28.1",
+    "globals": "16.5.0",
     "serve": "^14.2.0"
   }
 }

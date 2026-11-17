@@ -4,40 +4,11 @@ export class LLMIntentParser {
   constructor(options = {}) {
     this.apiEndpoint = options.apiEndpoint || '/api/parse-intent';
     this.timeout = options.timeout || 5000;
-    this.enabled = options.enabled !== false;
-    this.fallbackToMock = options.fallbackToMock !== false;
-    this._mockParser = null;
-  }
-
-  get mockParser() {
-    if (!this._mockParser) {
-      this._mockParser = new MockLLMIntentParser();
-    }
-    return this._mockParser;
   }
 
   async parse(text, locale = 'en-US') {
-    if (!this.enabled) {
-      throw new Error('LLM parser not enabled');
-    }
-
-    const startTime = performance.now();
-    try {
-      const response = await this.callLLM(text, locale);
-      const result = this.validateAndNormalize(response, text);
-      result.latencyMs = Math.round(performance.now() - startTime);
-      return result;
-    } catch (error) {
-      if (this.fallbackToMock) {
-        console.info('LLM endpoint unavailable, falling back to local Mock LLM parser:', error.message);
-        const mockResult = await this.mockParser.parse(text);
-        mockResult.latencyMs = Math.round(performance.now() - startTime);
-        mockResult.source = 'mock-llm';
-        return mockResult;
-      }
-      console.warn('LLM parsing failed:', error.message);
-      throw error;
-    }
+    const response = await this.callLLM(text, locale);
+    return this.validateAndNormalize(response, text);
   }
 
   async callLLM(text, locale) {
@@ -54,8 +25,6 @@ export class LLMIntentParser {
         signal: controller.signal
       });
 
-      clearTimeout(timeoutId);
-
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || `HTTP ${response.status}`);
@@ -63,9 +32,8 @@ export class LLMIntentParser {
 
       const data = await response.json();
       return data.intent || data;
-    } catch (error) {
+    } finally {
       clearTimeout(timeoutId);
-      throw error;
     }
   }
 
@@ -107,10 +75,23 @@ export class LLMIntentParser {
 
     const items = Array.isArray(parsed.items) ? parsed.items : 
       (parsed.item ? [{ item: parsed.item, quantity: parsed.quantity ?? 1, unit: parsed.unit ?? null }] : []);
+    const operations = Array.isArray(parsed.operations) ? parsed.operations : null;
 
-    if (items.length === 0 && parsed.action !== 'search') {
+    if (items.length === 0 && (!operations || operations.length === 0)) {
       throw new Error('No items found in LLM response');
     }
+
+    if (parsed.action === 'multi' && operations && operations.length > 0) {
+      return createIntent({
+        action: 'multi',
+        operations,
+        originalText,
+        source: 'llm',
+        confidence: parsed.confidence ?? 0.7
+      });
+    }
+
+    if (parsed.action === 'multi') throw new Error('Multi response must include explicit operations');
 
     const normalizedItems = items.map(item => ({
       item: String(item.item || '').trim(),
@@ -130,67 +111,5 @@ export class LLMIntentParser {
       source: 'llm',
       confidence: parsed.confidence ?? 0.7
     });
-  }
-}
-
-export class MockLLMIntentParser extends LLMIntentParser {
-  constructor() {
-    super({ enabled: true });
-  }
-
-  async parse(text) {
-    const lower = text.toLowerCase();
-    
-    // Detect multi-item patterns: "add X and Y", "buy X, Y, and Z", "get X and Y and Z"
-    const multiMatch = lower.match(/^(?:add|buy|get|i need|i want)\s+(.+)$/i);
-    if (multiMatch) {
-      const itemsText = multiMatch[1];
-      // Split by "and" or "," - handle "X, Y, and Z" pattern
-      const parts = itemsText.split(/\s*(?:,|and)\s*/i);
-      
-      // Filter out empty parts
-      const validParts = parts.filter(p => p.trim() && !/^(?:and|or|with|plus)$/i.test(p.trim()));
-      
-      if (validParts.length > 1) {
-        const items = [];
-        for (const part of validParts) {
-          // Extract quantity and unit if present (e.g., "2 bottles of water")
-          const qtyMatch = part.match(/^(\d+(?:\.\d+)?)\s+(\w+)\s+(.+)$/);
-          if (qtyMatch) {
-            items.push({ 
-              item: qtyMatch[3].trim(), 
-              quantity: parseFloat(qtyMatch[1]), 
-              unit: qtyMatch[2].toLowerCase() 
-            });
-          } else {
-            // Check for word quantities like "a couple of apples"
-            const wordQtyMatch = part.match(/^(?:a|an)\s+(\w+)\s+(.+)$/i);
-            if (wordQtyMatch) {
-              const qtyWords = { 'couple': 2, 'few': 3, 'several': 4, 'dozen': 12 };
-              items.push({ 
-                item: wordQtyMatch[2].trim(), 
-                quantity: qtyWords[wordQtyMatch[1].toLowerCase()] || 1, 
-                unit: null 
-              });
-            } else {
-              items.push({ item: part.trim(), quantity: 1, unit: null });
-            }
-          }
-        }
-        
-        if (items.length > 1) {
-          return createIntent({
-            action: 'multi',
-            items,
-            searchFilters: null,
-            originalText: text,
-            source: 'llm',
-            confidence: 0.8
-          });
-        }
-      }
-    }
-    
-    throw new Error('Mock LLM could not parse');
   }
 }

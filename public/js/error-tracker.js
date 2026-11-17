@@ -160,7 +160,7 @@ export class ErrorTracker {
           userId: this.userId
         }));
       } else {
-        await fetch(this.endpoint, {
+        const response = await fetch(this.endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -171,6 +171,9 @@ export class ErrorTracker {
             userId: this.userId
           })
         });
+        if (!response.ok) {
+          throw new Error(`Error reporting endpoint returned ${response.status}`);
+        }
       }
     } catch (error) {
       console.warn('[ErrorTracker] Flush failed:', error);

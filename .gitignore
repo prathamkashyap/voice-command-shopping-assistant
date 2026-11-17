@@ -10,3 +10,6 @@ out/
 *.log
 .DS_Store
 firebase-debug.log
+.firebase-emulator-*.json
+test-results/
+playwright-report/

@@ -6,13 +6,17 @@ export class ShoppingList {
     this.items = [];
     this.lastDeletedItem = null;
     this.syncManager = syncManager;
+    this.accountOwner = null;
+    this.hasDeviceList = false;
   }
 
   load() {
+    this.items = [];
+    this.lastDeletedItem = null;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        this.items = JSON.parse(stored);
+        this.items = JSON.parse(stored).filter(item => item && !item.deleted);
       }
       const undoStored = localStorage.getItem(UNDO_KEY);
       if (undoStored) {
@@ -25,13 +29,36 @@ export class ShoppingList {
     }
   }
 
-  save() {
+  enterAccount(owner, snapshot) {
+    this.hasDeviceList = this.items.length > 0;
+    this.accountOwner = owner;
+    this.items = snapshot?.items ?? [];
+    this.lastDeletedItem = snapshot?.lastDeletedItem ?? null;
+  }
+
+  leaveAccount() {
+    if (this.accountOwner === null) return false;
+    this.accountOwner = null;
+    this.hasDeviceList = false;
+    this.load();
+    return true;
+  }
+
+  saveLocal() {
+    if (this.accountOwner !== null) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.items));
     } catch (e) {
       console.error('Failed to save shopping list:', e);
     }
-    this.syncToFirestore();
+  }
+
+  save(changedItems, deletedItemIds = [], undoChanged = false) {
+    if (this.accountOwner === null) {
+      this.saveLocal();
+      if (undoChanged) this.saveUndo();
+    }
+    this.syncToFirestore(changedItems, deletedItemIds, undoChanged);
   }
 
   saveUndo() {
@@ -46,10 +73,11 @@ export class ShoppingList {
     }
   }
 
-  async syncToFirestore(deletedItemIds = []) {
-    if (this.syncManager && this.syncManager.isEnabled()) {
+  async syncToFirestore(changedItems, deletedItemIds, undoChanged) {
+    if (this.accountOwner !== null && this.syncManager?.isEnabled() &&
+        this.syncManager.getUserId() === this.accountOwner) {
       try {
-        await this.syncManager.syncItems(this.items, deletedItemIds);
+        await this.syncManager.syncItems(changedItems, deletedItemIds, undoChanged);
       } catch (e) {
         console.warn('Firestore sync failed:', e);
       }
@@ -84,7 +112,7 @@ export class ShoppingList {
       this.items.push(item);
     }
     
-    this.save();
+    this.save([existing ?? item]);
   }
 
   remove(id) {
@@ -95,19 +123,8 @@ export class ShoppingList {
       this.lastDeletedItem = deletedItem;
       // Remove from local array (UI disappears immediately)
       this.items = this.items.filter(i => i.id !== id);
-      this.save();
-      this.saveUndo();
+      this.save([], [id], true);
     }
-  }
-
-  // Soft delete: creates a deletion mutation for Firestore without
-  // affecting the local items array (which is already filtered by remove())
-  // This is called by syncItems when syncing to Firestore
-  getDeletionMutations() {
-    // This method is not directly used; syncItems handles deletion via
-    // the items array passed to it. For deleted items, we need to track them.
-    // The SyncManager will handle deletion by receiving items with deleted: true
-    return [];
   }
 
   undo() {
@@ -121,7 +138,8 @@ export class ShoppingList {
       i.unit === this.lastDeletedItem.unit
     );
     
-    if (existing) {
+    let restored = existing;
+    if (restored) {
       existing.quantity += this.lastDeletedItem.quantity;
       existing.updatedAt = this._now();
     } else {
@@ -129,11 +147,11 @@ export class ShoppingList {
       const { deletedAt, ...itemToRestore } = this.lastDeletedItem;
       itemToRestore.updatedAt = this._now();
       this.items.push(itemToRestore);
+      restored = itemToRestore;
     }
     
-    this.save();
     this.lastDeletedItem = null;
-    this.saveUndo();
+    this.save([restored], [], true);
     return true;
   }
 
@@ -150,7 +168,7 @@ export class ShoppingList {
         item.updatedAt = this._now();
       }
       this.items[index] = item;
-      this.save();
+      this.save([item]);
     }
   }
 
@@ -181,9 +199,19 @@ export class ShoppingList {
     // Capture all current item IDs for proper deletion sync
     const itemIdsToDelete = this.items.map(item => item.id);
     this.items = [];
-    this.save(itemIdsToDelete);
-    // Return the IDs so the sync manager can create deletion mutations
+    this.save([], itemIdsToDelete);
+    // Return the IDs so callers can report or test the deletion scope
     return itemIdsToDelete;
+  }
+
+  clearCompleted() {
+    const completedIds = this.items.filter(item => item.completed).map(item => item.id);
+    if (completedIds.length === 0) return [];
+
+    const ids = new Set(completedIds);
+    this.items = this.items.filter(item => !ids.has(item.id));
+    this.save([], completedIds);
+    return completedIds;
   }
 
   toggleCompleted(id) {
@@ -191,7 +219,7 @@ export class ShoppingList {
     if (item) {
       item.completed = !item.completed;
       item.updatedAt = this._now();
-      this.save();
+      this.save([item]);
       return item;
     }
     return null;
@@ -209,7 +237,7 @@ export class ShoppingList {
 
     item.quantity = Number((newQty).toFixed(2));
     item.updatedAt = this._now();
-    this.save();
+    this.save([item]);
     return item;
   }
 
@@ -227,17 +255,34 @@ export class ShoppingList {
     return Number(total.toFixed(2));
   }
 
+  exportAsCSV() {
+    if (this.items.length === 0) return '';
+    const escape = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const rows = [['Name', 'Category', 'Quantity', 'Unit', 'Completed', 'Product ID'].join(',')];
+    for (const item of this.getAll()) {
+      rows.push([
+        escape(item.name),
+        escape(item.category),
+        item.quantity ?? '',
+        escape(item.unit),
+        item.completed ? 'yes' : 'no',
+        item.productId ?? ''
+      ].join(','));
+    }
+    return rows.join('\n');
+  }
+
   exportAsText() {
     if (this.items.length === 0) return 'Shopping list is empty.';
     const dateStr = new Date().toLocaleDateString();
-    let text = `🛒 Shopping List (${dateStr})\n`;
+    let text = `Shopping List (${dateStr})\n`;
     text += `Total items: ${this.items.length}\n\n`;
 
     const grouped = this.groupedByCategory;
     for (const [category, items] of Object.entries(grouped)) {
       text += `[${category.toUpperCase()}]\n`;
       for (const item of items) {
-        const mark = item.completed ? '✓ ' : '• ';
+        const mark = item.completed ? '[x] ' : '- ';
         const unit = item.unit ? ` ${item.unit}` : '';
         text += `${mark}${item.name} - ${item.quantity}${unit}\n`;
       }
@@ -249,7 +294,7 @@ export class ShoppingList {
   exportAsMarkdown() {
     if (this.items.length === 0) return '_Shopping list is empty._';
     const dateStr = new Date().toLocaleDateString();
-    let md = `### 🛒 Shopping List - ${dateStr}\n\n`;
+    let md = `### Shopping List - ${dateStr}\n\n`;
 
     const grouped = this.groupedByCategory;
     for (const [category, items] of Object.entries(grouped)) {
@@ -265,7 +310,7 @@ export class ShoppingList {
   }
 
   getAll() {
-    return [...this.items].sort((a, b) => {
+    return this.items.filter(item => !item.deleted).sort((a, b) => {
       // Uncompleted items first, then by category, then by name
       if (Boolean(a.completed) !== Boolean(b.completed)) {
         return a.completed ? 1 : -1;

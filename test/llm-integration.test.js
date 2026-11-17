@@ -1,21 +1,13 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-const BASE_URL = process.env.FUNCTIONS_EMULATOR_URL || 'http://localhost:5001/voice-shopping-assistant-app/us-central1';
+const skip = process.env.SHOPPING_DEMO_INTEGRATION !== '1' && 'Run npm run test:integration';
 
-describe('LLM Integration Tests (requires Functions emulator)', () => {
-  const parseIntentUrl = `${BASE_URL}/parseIntent`;
-
-  before(() => {
-    if (!process.env.FUNCTIONS_EMULATOR_URL) {
-      console.log('Skipping integration tests: FUNCTIONS_EMULATOR_URL not set');
-    }
-  });
+describe('Functions emulator', { skip, timeout: 10000 }, () => {
+  const parseIntentUrl = 'http://127.0.0.1:5001/demo-voice-shopping/us-central1/parseIntent';
 
   describe('parseIntent endpoint', () => {
     it('should parse multi-item add command', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -26,13 +18,11 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
       const data = await response.json();
       assert.ok(data.intent);
       assert.equal(data.intent.action, 'multi');
-      assert.ok(data.intent.items.length >= 2);
-      assert.equal(data.intent.source, 'llm');
+      assert.deepEqual(data.intent.items.map(item => item.item), ['milk', 'bread']);
+      assert.equal(data.intent.source, 'rule');
     });
 
     it('should parse search command with filters', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -49,8 +39,6 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
     });
 
     it('should parse simple add command', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -67,8 +55,6 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
     });
 
     it('should return 400 for missing text', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -81,8 +67,6 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
     });
 
     it('should return 405 for GET method', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'GET'
       });
@@ -93,8 +77,6 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
     });
 
     it('should handle comma-separated items', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -105,12 +87,10 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
       const data = await response.json();
       assert.ok(data.intent);
       assert.equal(data.intent.action, 'multi');
-      assert.ok(data.intent.items.length >= 3);
+      assert.deepEqual(data.intent.items.map(item => item.item), ['apples', 'bananas', 'bread']);
     });
 
     it('should handle modify command', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -129,8 +109,6 @@ describe('LLM Integration Tests (requires Functions emulator)', () => {
 
   describe('Error handling and fallbacks', () => {
     it('should return structured error on invalid request', async () => {
-      if (!process.env.FUNCTIONS_EMULATOR_URL) return;
-
       const response = await fetch(parseIntentUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

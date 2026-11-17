@@ -428,6 +428,68 @@ describe('ShoppingList', () => {
 
       const md = testList.exportAsMarkdown();
       assert.ok(md.includes('- [ ] **Milk** (2 L)'));
+
+      const csv = testList.exportAsCSV();
+      assert.ok(csv.includes('Name,Category,Quantity,Unit,Completed,Product ID'));
+      assert.ok(csv.includes('"Milk","Dairy",2,"L",no,'));
+    });
+  });
+
+  describe('clearCompleted() and deletion sync', () => {
+    it('should remove completed items and pass deleted ids to sync', () => {
+      const syncCalls = [];
+      const syncManager = {
+        isEnabled: () => true,
+        getUserId: () => 'shopper',
+        syncItems: (items, deletedItemIds = []) => {
+          syncCalls.push({ itemCount: items.length, deletedItemIds });
+          return Promise.resolve(true);
+        }
+      };
+      const testList = new ShoppingList(syncManager);
+      testList.enterAccount('shopper');
+      global.localStorage = {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {}
+      };
+
+      testList.items = [
+        { id: 'done', name: 'Milk', category: 'Dairy', quantity: 1, unit: 'L', completed: true },
+        { id: 'todo', name: 'Bread', category: 'Bakery', quantity: 1, unit: 'loaf', completed: false }
+      ];
+
+      const removedIds = testList.clearCompleted();
+
+      assert.deepEqual(removedIds, ['done']);
+      assert.equal(testList.items.length, 1);
+      assert.equal(testList.items[0].id, 'todo');
+      assert.equal(syncCalls.length, 1);
+      assert.deepEqual(syncCalls[0].deletedItemIds, ['done']);
+      assert.equal(syncCalls[0].itemCount, 0);
+    });
+
+    it('sends the changed item only when updating quantity and completion', () => {
+      const calls = [];
+      const list = new ShoppingList({
+        isEnabled: () => true,
+        getUserId: () => 'shopper',
+        syncItems: (items, deletedIds) => calls.push({
+          items: items.map(({ id, quantity, completed }) => ({ id, quantity, completed })),
+          deletedIds
+        })
+      });
+      list.enterAccount('shopper');
+      list.items = [
+        { id: 'milk', name: 'Milk', category: 'Dairy', quantity: 1, completed: false },
+        { id: 'bread', name: 'Bread', category: 'Bakery', quantity: 1, completed: false }
+      ];
+      list.incrementQuantity('milk');
+      list.toggleCompleted('bread');
+      assert.deepEqual(calls, [
+        { items: [{ id: 'milk', quantity: 2, completed: false }], deletedIds: [] },
+        { items: [{ id: 'bread', quantity: 1, completed: true }], deletedIds: [] }
+      ]);
     });
   });
 });
