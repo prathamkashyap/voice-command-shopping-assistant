@@ -544,6 +544,7 @@ export class UI {
     if (syncLabel) {
       const labels = {
         'local-only': 'Local only',
+        'local-items': 'Local items',
         connecting: 'Connecting…',
         synced: pendingCount > 0 ? `Syncing ${pendingCount}` : 'Synced',
         syncing: 'Syncing…',
@@ -554,6 +555,7 @@ export class UI {
     }
     const descriptions = {
       'local-only': 'Shopping list is stored on this device',
+      'local-items': 'Some items are only stored on this device',
       connecting: 'Connecting to cloud sync',
       offline: 'Offline — changes are queued locally',
       error: 'Sync encountered an error'

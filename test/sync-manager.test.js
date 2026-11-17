@@ -470,6 +470,35 @@ describe('SyncManager', () => {
       assert.equal(sm.shoppingList.items[0].quantity, 4);
     });
 
+    it('keeps pending edits and deletions when the listener receives older remote values', async () => {
+      const { sm, subscriptions } = harness();
+      sm.offlineQueue = [{
+        items: [{ id: 'milk', name: 'Milk', quantity: 3, updatedAt: 1000 }],
+        deletedItemIds: ['bread']
+      }];
+      await sm.startRealtimeListener();
+      subscriptions[0].next(snapshot(
+        ['milk', { quantity: 1, updatedAt: 2000 }],
+        ['bread', { quantity: 1, updatedAt: 2000 }],
+        ['apples', { quantity: 2, updatedAt: 2000 }]
+      ));
+      assert.deepEqual(sm.shoppingList.items.map(({ id, quantity }) => [id, quantity]), [
+        ['milk', 3], ['apples', 2]
+      ]);
+      assert.notEqual(sm.syncStatus, 'synced');
+    });
+
+    it('reconciles on startup without re-uploading remote or local-only items', async t => {
+      const { sm, subscriptions } = harness();
+      const publish = t.mock.method(sm, 'publishItems', async () => true);
+      sm.shoppingList.items = [{ id: 'local', quantity: 1, updatedAt: 1000 }];
+      await sm.startRealtimeListener();
+      subscriptions[0].next(snapshot(['remote', { quantity: 2, updatedAt: 2000 }]));
+      assert.deepEqual(sm.shoppingList.items.map(item => item.id), ['local', 'remote']);
+      assert.equal(sm.syncStatus, 'local-items');
+      assert.equal(publish.mock.callCount(), 0);
+    });
+
     it('cancels an attachment awaiting the SDK when stopped and restarted', async () => {
       let resume;
       let loads = 0;

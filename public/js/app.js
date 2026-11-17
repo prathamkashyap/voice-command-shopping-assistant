@@ -100,16 +100,13 @@ class App {
         return;
       }
       this.errorTracker?.setUserId(this.syncManager.getUserId());
-      await this.syncManager.initialSync(this.shoppingList);
-      
+
       let previousSyncStatus = null;
       this.syncManager.onSyncStatusChange((status) => {
         this.ui.setSyncStatus(status);
         if (status === previousSyncStatus) return;
         if (status === 'offline') {
           this.ui.showToast('Offline — changes are saved locally and will sync later', 'warning');
-        } else if (status === 'synced' && previousSyncStatus && previousSyncStatus !== 'synced') {
-          this.ui.showToast('Back online — shopping list synced', 'success');
         }
         previousSyncStatus = status;
       });

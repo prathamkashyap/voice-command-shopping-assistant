@@ -66,6 +66,7 @@ export class SyncManager {
     this.listener = null;
     this.listenerFailed = false;
     this.remoteConfirmed = false;
+    this.remoteItemIds = new Set();
     this.session = null;
     this.isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.syncStatusCallbacks = [];
@@ -103,6 +104,7 @@ export class SyncManager {
       if (session.signal.aborted) return false;
       this.offlineQueue = queue;
       this.enabled = true;
+      if (queue.length) this.handleRemoteChanges([]);
       this.setupOnlineOfflineListeners(session.signal);
 
       if (this.isOnline) {
@@ -180,6 +182,7 @@ export class SyncManager {
     this.listenerFailed = false;
     this.outboxFailed = false;
     this.remoteConfirmed = false;
+    this.remoteItemIds.clear();
     this.offlineQueue = [];
     this.pendingPersistence.clear();
     this._notifySyncStatus(this.isOnline ? 'local-only' : 'offline');
@@ -308,41 +311,6 @@ export class SyncManager {
     }
   }
 
-  async fetchRemoteItems() {
-    if (!this.enabled || !this.userId) return [];
-
-    const db = this.db;
-    const userId = this.userId;
-    try {
-      const { collection, getDocs, query } = await this.loadFirestore();
-
-      // Use collection reference for shoppingList: users/{userId}/shoppingList (3 segments = valid collection)
-      const itemsRef = collection(db, 'users', userId, 'shoppingList');
-      // Fetch ALL items (including deleted) to prevent resurrection of deleted items
-      const q = query(itemsRef);
-      const snapshot = await getDocs(q);
-
-      const remoteItems = [];
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        // Convert Firestore Timestamp to milliseconds for comparison
-        const updatedAtMillis = getTimestampMillis(data.updatedAt);
-        remoteItems.push({
-          id: doc.id,
-          ...data,
-          // Store both the raw value (for Firestore writes) and millis (for comparison)
-          _updatedAtMillis: updatedAtMillis,
-          updatedAt: updatedAtMillis !== null ? updatedAtMillis : Date.now()
-        });
-      });
-
-      return remoteItems;
-    } catch (error) {
-      console.warn('Fetch remote items failed:', error.message);
-      return [];
-    }
-  }
-
   /**
    * Merge local and remote items using Last-Write-Wins (LWW) by timestamp.
    * Strategy:
@@ -409,33 +377,6 @@ export class SyncManager {
     return Array.from(merged.values());
   }
 
-  async initialSync(shoppingList) {
-    if (!this.enabled) return false;
-    this.shoppingList = shoppingList;
-
-    try {
-      const session = this.session;
-      const userId = this.userId;
-      const remoteItems = await this.fetchRemoteItems();
-      if (!this.enabled || this.session !== session || this.userId !== userId) return false;
-      if (remoteItems.length === 0) {
-        await this.syncItems(shoppingList.items);
-        return true;
-      }
-
-      const merged = this.mergeItems(shoppingList.items, remoteItems);
-      shoppingList.items = merged;
-      shoppingList.saveLocal();
-
-      await this.syncItems(merged);
-      return true;
-    } catch (error) {
-      console.warn('Initial sync failed:', error.message);
-      this._notifySyncStatus('error');
-      return false;
-    }
-  }
-
   loadSyncState() {
     try {
       const stored = localStorage.getItem(SYNC_STATE_KEY);
@@ -479,10 +420,15 @@ export class SyncManager {
    * Notify all registered callbacks of sync status change
    */
   _notifySyncStatus(status) {
-    this.syncStatus = (this.listenerFailed || this.outboxFailed) && (status === 'syncing' || status === 'synced')
+    this.syncStatus = (this.listenerFailed || this.outboxFailed) && ['syncing', 'synced', 'local-items'].includes(status)
       ? 'error'
       : status;
     this.syncStatusCallbacks.forEach(cb => cb(this.syncStatus));
+  }
+
+  reportConfirmedStatus() {
+    const hasLocalItems = this.shoppingList?.items.some(item => !this.remoteItemIds.has(item.id));
+    this._notifySyncStatus(hasLocalItems ? 'local-items' : 'synced');
   }
 
   /**
@@ -551,9 +497,12 @@ export class SyncManager {
         });
         this.handleRemoteChanges(remoteItems);
         this.remoteConfirmed = !snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites;
-        if (this.remoteConfirmed && !this.syncInProgress && this.getPendingOperationCount() === 0) {
-          this.listenerFailed = false;
-          this._notifySyncStatus('synced');
+        if (this.remoteConfirmed) {
+          this.remoteItemIds = new Set(remoteItems.filter(item => !item.deleted).map(item => item.id));
+          if (!this.syncInProgress && this.getPendingOperationCount() === 0) {
+            this.listenerFailed = false;
+            this.reportConfirmedStatus();
+          }
         }
       }, onError);
       if (!current()) {
@@ -572,6 +521,7 @@ export class SyncManager {
   stopRealtimeListener() {
     const listener = this.listener;
     this.listener = null;
+    this.remoteConfirmed = false;
     listener?.unsubscribe?.();
   }
 
@@ -585,12 +535,17 @@ export class SyncManager {
       // Get current local items
       const localItems = this.shoppingList ? this.shoppingList.items : [];
       
-      // Merge remote changes with local
       const merged = this.mergeItems(localItems, remoteItems);
-      
+      const pending = [...this.offlineQueue, ...Array.from(this.pendingPersistence).flat()];
+      const items = new Map(merged.map(item => [item.id, item]));
+      for (const group of pending) {
+        for (const item of group.items) items.set(item.id, { ...item });
+        for (const id of group.deletedItemIds) items.delete(id);
+      }
+
       // Update local state
       if (this.shoppingList) {
-        this.shoppingList.items = merged;
+        this.shoppingList.items = [...items.values()];
         this.shoppingList.saveLocal();
       }
 
@@ -641,17 +596,17 @@ export class SyncManager {
     while (current()) {
       const queue = await this.outbox.list(userId);
       if (!current()) return false;
-      this.offlineQueue = queue;
+      this.offlineQueue = [...queue];
       if (!queue.length) {
-        if (!this.pendingPersistence.size && this.remoteConfirmed) this._notifySyncStatus('synced');
+        if (!this.pendingPersistence.size && this.remoteConfirmed) this.reportConfirmedStatus();
         return true;
       }
-      const group = queue[0];
-      if (!await this.publishItems(group.items, group.deletedItemIds)) return false;
-      // The ID is unique across tabs within this browser database. Finish recording
-      // the server acknowledgment for this owner even if auth changed in the meantime.
-      await this.outbox.acknowledge(group.sequence);
-      if (current()) this.offlineQueue = this.offlineQueue.filter(entry => entry.sequence !== group.sequence);
+      for (const group of queue) {
+        if (!current() || !await this.publishItems(group.items, group.deletedItemIds)) return false;
+        // The ID is unique within this database. Record an acknowledgment even if auth changed during the write.
+        await this.outbox.acknowledge(group.sequence);
+        if (current()) this.offlineQueue = this.offlineQueue.filter(entry => entry.sequence !== group.sequence);
+      }
     }
     return false;
   }
