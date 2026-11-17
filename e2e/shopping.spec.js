@@ -32,6 +32,14 @@ test('the deployed headers permit local shopping and export controls', async ({ 
   await expect(page.locator('.list-item')).toHaveCount(2);
   await page.getByRole('button', { name: 'Export list' }).click();
   await expect(page.locator('#exportModal')).toHaveClass(/open/);
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async value => {
+      globalThis.shoppingClipboard = value;
+    };
+  });
+  await page.locator('#copyTextBtn').click();
+  await expect(page.getByText('Copied to clipboard!', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => globalThis.shoppingClipboard)).toMatch(/apple/i);
   await page.locator('#closeExportModal').click();
   await expect(page.locator('#exportModal')).not.toHaveClass(/open/);
   expect(externalRequests).toEqual([]);
