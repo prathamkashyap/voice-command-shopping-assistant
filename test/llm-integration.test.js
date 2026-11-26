@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 const skip = process.env.SHOPPING_DEMO_INTEGRATION !== '1' && 'Run npm run test:integration';
 
-describe('Functions emulator', { skip, timeout: 10000 }, () => {
-  const parseIntentUrl = 'http://127.0.0.1:5001/demo-voice-shopping/us-central1/parseIntent';
+// The first request also starts the local Functions runtime on a cold machine.
+describe('Functions emulator', { skip, timeout: 60000 }, () => {
+  const port = Number(process.env.SHOPPING_FUNCTIONS_PORT ?? 5001);
+  const parseIntentUrl = `http://127.0.0.1:${port}/demo-voice-shopping/us-central1/parseIntent`;
 
   describe('parseIntent endpoint', () => {
     it('should parse multi-item add command', async () => {
