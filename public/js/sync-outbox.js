@@ -135,13 +135,54 @@ export class SyncOutbox {
     });
   }
 
-  async acknowledge(sequence) {
+  async acknowledge(sequence, reconciliation) {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE, 'readwrite');
-      transaction.objectStore(STORE).delete(sequence);
-      transaction.oncomplete = () => resolve();
-      transaction.onabort = () => reject(transaction.error);
+      const transaction = db.transaction(reconciliation ? [STORE, LISTS] : STORE, 'readwrite');
+      const store = transaction.objectStore(STORE);
+      let result;
+      let reconciliationError;
+      const abort = error => {
+        reconciliationError = error;
+        transaction.abort();
+      };
+      transaction.oncomplete = () => resolve(result);
+      transaction.onabort = () => reject(reconciliationError ?? transaction.error);
+      try {
+        if (!reconciliation) {
+          store.delete(sequence);
+          return;
+        }
+        const { owner, mergeItems } = reconciliation;
+        const record = store.get(sequence);
+        const lists = transaction.objectStore(LISTS);
+        const cached = lists.get(owner);
+        const queue = store.index('owner').getAll(owner);
+        queue.onsuccess = () => {
+          try {
+            // A different sender may have already reconciled and acknowledged it.
+            // Returning that durable view avoids applying a stale response twice.
+            if (!record.result) {
+              result = { acknowledged: false, list: cached.result, queue: queue.result };
+              return;
+            }
+            if (record.result.owner !== owner) throw new Error('Cannot acknowledge another account\'s operation');
+            const remaining = queue.result.filter(group => group.sequence !== sequence);
+            store.delete(sequence);
+            const list = {
+              owner,
+              items: mergeItems(cached.result?.items ?? [], remaining),
+              lastDeletedItem: cached.result?.lastDeletedItem ?? null
+            };
+            lists.put(list);
+            result = { acknowledged: true, list, queue: remaining };
+          } catch (error) {
+            abort(error);
+          }
+        };
+      } catch (error) {
+        abort(error);
+      }
     });
   }
 

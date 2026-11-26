@@ -1,6 +1,6 @@
 # Shopping list persistence and synchronization
 
-The current list is stored in `localStorage`, separate from its offline queue. Firestore item documents live at `users/{uid}/shoppingList/{itemId}`. The existing reader treats a missing local item as a potential remote addition and uses timestamps for whole-item replacement. A device clock and an upload timestamp cannot establish what another client saw before editing.
+Authenticated lists, undo state, and pending operations are stored in IndexedDB. Device-only lists remain in `localStorage`. Firestore item documents live at `users/{uid}/shoppingList/{itemId}`. The existing reader uses timestamps for whole-item replacement. A device clock and an upload timestamp cannot establish what another client saw before editing. The decisions below include the intended revision protocol; the implementation status distinguishes what is available now.
 
 ## Decisions for the next sync version
 
@@ -34,6 +34,22 @@ New readers initially accept old documents with a baseline revision. In emulator
 
 Authenticated list edits and undo state are committed with their queued mutations in one IndexedDB transaction scoped to the Firebase UID. The sender removes a group after Firestore acknowledges it. Web Locks serializes drain work across tabs where supported. Each tab serializes its own work in browsers without Web Locks.
 
+Each group keeps its original UUID across retries and restarts. A Firestore transaction reads `users/{uid}/syncReceipts/{operationId}` before writing. If absent, it writes the changed items or tombstones and a receipt `{ version: 1, committedAt: serverTimestamp() }` together. If present, it leaves server data untouched and reads the group's affected items for local reconciliation. A failed transaction or lost response leaves the group queued. The callback checks its captured account, database, and session before and after reads on every attempt. It does not mutate application state.
+
+A replay acknowledgment removes the group and reconciles its cached list in one IndexedDB transaction. Confirmed values replace that group's optimistic values, including values stamped by an incorrect device clock, and remaining queued edits are applied afterward. A newer confirmed listener value takes precedence over an older replay read. Undo state is preserved. If another sender already acknowledged the group, the durable projection is returned without applying the old reconciliation again. Storage failure rolls back both acknowledgment and projection changes.
+
+Receipt rules allow only the owner to read or create the exact versioned receipt with a server commit time. Clients cannot update or delete receipts. Receipts have no automatic expiry; pruning them would let dormant clients replay an old operation. This provides duplicate protection for the same operation ID even without Web Locks. It does not resolve conflicts between distinct operation IDs, prevent older clients from overwriting item documents, or add revision-aware restores.
+
 Startup reads the current account's cached list and queue together and subscribes to snapshots. Authenticated edits send only changed records. A queued edit stays visible, and a queued deletion stays hidden, when an older snapshot arrives. The IndexedDB upgrade rebuilds the account cache from its existing queue. Previously acknowledged cloud items join the cache when the listener next receives confirmed records.
 
-Existing device-list data remains accessible through **Device list** or `/?mode=local`. The account and device lists use separate storage. The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. An assisted import, revision checks, and server-side replay receipts are subsequent steps.
+Existing device-list data remains accessible through **Device list** or `/?mode=local`. The account and device lists use separate storage. The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. Assisted import, item revisions, conflict review, and bounded automatic retry backoff remain subsequent steps.
+
+## Receipt rollout and verification
+
+Deploy the additive receipt rules before releasing the receipt-aware client. Existing item fields and IndexedDB operation IDs stay compatible. If the new rules are missing, cloud writes fail and the local outbox remains available for retry; do not fall back to the old writer. Old queued operations that previously committed without a receipt cannot be retrospectively deduplicated. Keep receipts when rolling back a client. This repository change does not deploy either rules or hosting.
+
+The protocol follows [Firestore's transaction guarantees and restrictions](https://firebase.google.com/docs/firestore/manage-data/transactions). Transactions can rerun their callbacks and fail offline; IndexedDB remains the durable queue. Each group contains at most 400 item changes plus one receipt. This preserves a bounded write count but does not bypass Firestore request-size limits for unusually large item payloads.
+
+Regression coverage is divided between `test/sync-receipts.test.js` (session retirement and projection behavior), `test/firebase-sync-integration.test.js` (real commits, lost responses, concurrent receipt reads, restored deletions, and owner/schema rules), and `e2e/sync-storage.spec.js` (real IndexedDB atomic acknowledgment and rollback). Run `npm run lint`, `npm test`, and `npm run test:local` before releasing this change. The last command uses only the local demo Firebase project.
+
+Verified on 26 November 2026: lint passed; `npm test` reported 156 passes and 5 expected emulator skips; `SHOPPING_FUNCTIONS_PORT=5501 PLAYWRIGHT_BROWSERS_PATH=/tmp/vcsa-browsers npm run test:local` passed all 13 Firebase emulator checks and all 10 Chromium checks. The alternate Functions port avoids an existing local service on port 5001. This verifies the local implementation, not a production deployment or the future revision/conflict protocol.

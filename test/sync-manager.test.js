@@ -103,12 +103,12 @@ describe('outbox replay acknowledgment', () => {
     const sync = new SyncManager({
       outbox: new MemoryOutbox(),
       loadFirestore: async () => ({
-        collection: () => 'list',
-        doc: (_collection, id) => id,
+        collection: (_db, ...path) => path.join('/'),
+        doc: (collection, id) => `${collection}/${id}`,
         serverTimestamp: () => 'server-time',
-        writeBatch: () => ({
+        runTransaction: async (_db, update) => update({
+          get: async () => ({ exists: () => false }),
           set: (...args) => writes.push(args),
-          commit: async () => {}
         })
       })
     });
@@ -116,7 +116,11 @@ describe('outbox replay acknowledgment', () => {
     sync.userId = 'shopper';
     sync.saveSyncState = () => {};
     assert.equal(await sync.syncItems([], ['never-uploaded']), true);
-    assert.deepEqual(writes, [['never-uploaded', { deleted: true, updatedAt: 'server-time' }, { merge: true }]]);
+    assert.deepEqual(writes[0], [
+      'users/shopper/shoppingList/never-uploaded', { deleted: true, updatedAt: 'server-time' }, { merge: true }
+    ]);
+    assert.match(writes[1][0], /^users\/shopper\/syncReceipts\//);
+    assert.deepEqual(writes[1][1], { version: 1, committedAt: 'server-time' });
   });
 });
 

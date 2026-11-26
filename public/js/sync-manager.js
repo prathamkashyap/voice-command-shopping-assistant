@@ -50,6 +50,12 @@ function getTimestampMillis(value) {
   return null;
 }
 
+function remoteItem(snapshot) {
+  const data = snapshot.data() ?? { deleted: true };
+  const millis = getTimestampMillis(data.updatedAt);
+  return { ...data, id: snapshot.id, _updatedAtMillis: millis, updatedAt: millis };
+}
+
 export class SyncManager {
   constructor({ loadFirestore = importFirestore, loadAuth = importAuth, outbox = new SyncOutbox() } = {}) {
     this.loadFirestore = loadFirestore;
@@ -67,6 +73,7 @@ export class SyncManager {
     this.listenerFailed = false;
     this.remoteConfirmed = false;
     this.remoteItemIds = new Set();
+    this.confirmedRemoteItems = new Map();
     this.session = null;
     this.isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     this.syncStatusCallbacks = [];
@@ -183,6 +190,7 @@ export class SyncManager {
     this.outboxFailed = false;
     this.remoteConfirmed = false;
     this.remoteItemIds.clear();
+    this.confirmedRemoteItems.clear();
     this.offlineQueue = [];
     this.pendingPersistence.clear();
     if (this.shoppingList?.leaveAccount?.()) this.renderList();
@@ -250,63 +258,64 @@ export class SyncManager {
     return true;
   }
 
-  async publishItems(localItems, deletedItemIds) {
+  async publishItems(localItems, deletedItemIds, operationId) {
     if (this.syncInProgress) return false;
     this.syncInProgress = true;
     const session = this.session;
     const userId = this.userId;
-    const current = () => this.enabled && this.session === session && this.userId === userId;
+    const db = this.db;
+    const current = () => this.enabled && this.session === session && this.userId === userId && this.db === db;
     this._notifySyncStatus('syncing');
 
     try {
-      const { collection, doc, writeBatch, serverTimestamp } = await this.loadFirestore();
+      // Never mint a replacement ID during replay, including for malformed legacy records.
+      if (typeof operationId !== 'string' || !operationId || operationId.includes('/')) {
+        throw new Error('A durable operation ID is required');
+      }
+      const { collection, doc, runTransaction, serverTimestamp } = await this.loadFirestore();
       if (!current()) return false;
 
-      // Use collection reference for shoppingList: users/{userId}/shoppingList (3 segments = valid collection)
-      const itemsRef = collection(this.db, 'users', this.userId, 'shoppingList');
-      const batch = writeBatch(this.db);
-
-      // Write/update existing items
-      for (const item of (localItems || [])) {
-        const itemRef = doc(itemsRef, item.id);
-        
-        // Prepare item data for Firestore
-        const itemData = {
-          ...item,
-          // Always use serverTimestamp for the authoritative write
-          updatedAt: serverTimestamp(),
-          // Keep deleted flag if present (for soft deletes)
-          deleted: item.deleted === true,
+      const itemsRef = collection(db, 'users', userId, 'shoppingList');
+      const receiptRef = doc(collection(db, 'users', userId, 'syncReceipts'), operationId);
+      const replayedItems = await runTransaction(db, async transaction => {
+        const requireCurrent = () => {
+          if (!current()) throw new Error('Sync session closed');
         };
-        
-        // Remove client-only fields and undefined values that Firestore doesn't accept
-        const { source, _updatedAtMillis, ...firestoreData } = itemData;
-        
-        // Filter out undefined values (Firestore doesn't accept undefined)
-        Object.keys(firestoreData).forEach(key => {
-          if (firestoreData[key] === undefined) {
-            delete firestoreData[key];
+        requireCurrent();
+        const receipt = await transaction.get(receiptRef);
+        requireCurrent();
+        if (receipt.exists()) {
+          // A replay changes no server state, so no new listener event is guaranteed.
+          // Read the affected rows to replace the acknowledged optimistic overlay.
+          const ids = new Set([...localItems.map(item => item.id), ...deletedItemIds]);
+          const snapshots = await Promise.all([...ids].map(id => transaction.get(doc(itemsRef, id))));
+          requireCurrent();
+          return snapshots.map(remoteItem);
+        }
+
+        for (const item of localItems) {
+          const { source, _updatedAtMillis, ...firestoreData } = {
+            ...item, updatedAt: serverTimestamp(), deleted: item.deleted === true
+          };
+          for (const key of Object.keys(firestoreData)) {
+            if (firestoreData[key] === undefined) delete firestoreData[key];
           }
-        });
-        
-        batch.set(itemRef, firestoreData);
-      }
+          transaction.set(doc(itemsRef, item.id), firestoreData);
+        }
+        for (const deletedId of deletedItemIds) {
+          transaction.set(doc(itemsRef, deletedId), {
+            deleted: true, updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
+        transaction.set(receiptRef, { version: 1, committedAt: serverTimestamp() });
+        return null;
+      });
 
-      // Handle deletions: mark items as deleted in Firestore
-      for (const deletedId of deletedItemIds) {
-        const itemRef = doc(itemsRef, deletedId);
-        batch.set(itemRef, {
-          deleted: true,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      }
-
-      await batch.commit();
       if (current()) {
         this.lastSyncTime = Date.now();
         this.saveSyncState();
       }
-      return true;
+      return { replayedItems };
     } catch (error) {
       if (!current()) return false;
       console.warn('Firestore sync failed:', error.message);
@@ -497,11 +506,12 @@ export class SyncManager {
         if (!current()) return;
         const remoteItems = [];
         snapshot.forEach(doc => {
-          const data = doc.data();
-          const millis = getTimestampMillis(data.updatedAt);
-          remoteItems.push({ ...data, id: doc.id, _updatedAtMillis: millis, updatedAt: millis ?? Date.now() });
+          remoteItems.push(remoteItem(doc));
         });
         this.remoteConfirmed = !snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites;
+        if (this.remoteConfirmed) {
+          this.confirmedRemoteItems = new Map(remoteItems.map(item => [item.id, item]));
+        }
         this.handleRemoteChanges(remoteItems, this.remoteConfirmed);
         if (this.remoteConfirmed) {
           this.remoteItemIds = new Set(remoteItems.filter(item => !item.deleted).map(item => item.id));
@@ -541,6 +551,19 @@ export class SyncManager {
       for (const id of group.deletedItemIds) items.delete(id);
     }
     return [...items.values()];
+  }
+
+  reconcileReplay(localItems, replayedItems, pending, current) {
+    const affected = new Set(replayedItems.map(item => item.id));
+    const confirmed = replayedItems.map(item => {
+      const latest = current() ? this.confirmedRemoteItems.get(item.id) : null;
+      return latest && latest._updatedAtMillis > item._updatedAtMillis ? latest : item;
+    });
+    if (current()) {
+      confirmed.push(...[...this.confirmedRemoteItems.values()].filter(item => !affected.has(item.id)));
+    }
+    // Optimistic client clocks cannot defeat a confirmed replay result.
+    return this.mergeProjection(localItems.filter(item => !affected.has(item.id)), confirmed, pending);
   }
 
   renderList() {
@@ -614,10 +637,27 @@ export class SyncManager {
         return true;
       }
       for (const group of queue) {
-        if (!current() || !await this.publishItems(group.items, group.deletedItemIds)) return false;
+        if (!current()) return false;
+        const result = await this.publishItems(group.items, group.deletedItemIds, group.id);
+        if (!result) return false;
         // The ID is unique within this database. Record an acknowledgment even if auth changed during the write.
-        await this.outbox.acknowledge(group.sequence);
-        if (current()) this.offlineQueue = this.offlineQueue.filter(entry => entry.sequence !== group.sequence);
+        const reconciliation = result.replayedItems ? {
+          owner: userId,
+          mergeItems: (items, remaining) => this.reconcileReplay(items, result.replayedItems, remaining, current)
+        } : undefined;
+        const account = await this.outbox.acknowledge(group.sequence, reconciliation);
+        if (current()) {
+          // The atomic account read is authoritative. Another tab may have removed
+          // more than this group; reusing our old queue would restore stale overlays.
+          this.offlineQueue = account?.queue ?? this.offlineQueue.filter(entry => entry.sequence !== group.sequence);
+          if (account && this.shoppingList?.accountOwner === userId) {
+            const remaining = [...this.offlineQueue, ...Array.from(this.pendingPersistence).flat()];
+            this.shoppingList.items = account.acknowledged
+              ? this.reconcileReplay(account.list?.items ?? [], result.replayedItems, remaining, current)
+              : this.mergeProjection(account.list?.items ?? [], [...this.confirmedRemoteItems.values()], remaining);
+            this.renderList();
+          }
+        }
       }
     }
     return false;

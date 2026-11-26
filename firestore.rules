@@ -7,6 +7,16 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // Keep receipts immutable so a completed operation stays safe to replay.
+    match /users/{userId}/syncReceipts/{operationId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['version', 'committedAt'])
+        && request.resource.data.version is int
+        && request.resource.data.version == 1
+        && request.resource.data.committedAt == request.time;
+    }
+
     // Users can only access their own history
     match /users/{userId}/history/{historyId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
