@@ -16,11 +16,15 @@ if (mode !== 'start' && !Object.hasOwn(commands, mode)) {
 
 const host = '127.0.0.1';
 const project = 'demo-voice-shopping';
+const functionsPort = Number(process.env.SHOPPING_FUNCTIONS_PORT ?? 5001);
+if (!Number.isInteger(functionsPort) || functionsPort < 1024 || functionsPort > 65535) {
+  throw new Error('SHOPPING_FUNCTIONS_PORT must be an integer from 1024 to 65535.');
+}
 const config = JSON.parse(await readFile(join(root, 'firebase.json'), 'utf8'));
 config.emulators = {
   auth: { host, port: 9099 },
   firestore: { host, port: 8080, websocketPort: 9150 },
-  functions: { host, port: 5001 },
+  functions: { host, port: functionsPort },
   hosting: { host, port: 5055 },
   ui: { enabled: false }
 };

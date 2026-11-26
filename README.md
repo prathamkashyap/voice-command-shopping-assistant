@@ -66,6 +66,8 @@ npm run test:local
 
 `npm test` runs the unit and asset checks and skips the emulator groups. `npm run test:integration` starts an isolated Firebase demo project and runs the Functions and Firestore tests. `npm run test:local` also runs browser checks under the Hosting emulator's headers. These checks use the local rules parser in Functions and require no paid provider keys.
 
+If another local service uses the default Functions port 5001, select an unused port with `SHOPPING_FUNCTIONS_PORT=5501 npm run test:local` (also supported by `test:integration` and `dev:functions`). The integration tests use the same port automatically.
+
 Run `npm run dev:functions` to start the same demo emulators for manual testing. Open `http://127.0.0.1:5055` for local-only browsing or append `?mode=emulator` to connect to local Auth and Firestore. The opt-in browser mode downloads the Firebase SDK from its CDN. When changing files inside `public/`, run `node scripts/update-precache.mjs` to update the offline release manifest.
 
 ---

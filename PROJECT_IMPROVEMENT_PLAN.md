@@ -18,6 +18,8 @@ The recommended order is:
 
 This document is a plan, not a claim that the fixes are implemented. Agent assignments below are proposed task fits, not results from benchmarking these agents on this repository.
 
+Implementation checkpoint, 26 November 2026: the [sync contract and verification record](docs/sync-contract.md#implementation-status) track the durable account outbox, atomic local saves, and server replay receipts now implemented on `codex/shopping-reliability`. T06/T07 still include outstanding automatic retries, item revisions, and conflict handling. The audit evidence below retains its original review baseline.
+
 ## 2. Review baseline and evidence limits
 
 | Item | Observed baseline |
