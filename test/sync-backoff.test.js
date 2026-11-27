@@ -105,6 +105,39 @@ test('transient failures stop after four retries and a later edit stays behind t
   assert.equal(sync.syncStatus, 'error');
 });
 
+test('a retry that becomes due during sender cleanup still runs when the lock is released', async t => {
+  const state = setup(t, ['unavailable']);
+  const { sync, attempts } = state;
+  const withSender = sync.outbox.withSender.bind(sync.outbox);
+  let release;
+  const finished = new Promise(resolve => { release = resolve; });
+  let drainFinished;
+  const waitingForRelease = new Promise(resolve => { drainFinished = resolve; });
+  let first = true;
+  sync.outbox.withSender = (owner, send) => withSender(owner, async () => {
+    const result = await send();
+    if (first) {
+      first = false;
+      drainFinished();
+      await finished;
+    }
+    return result;
+  });
+
+  const edit = sync.syncItems([{ id: 'milk' }]);
+  await waitingForRelease;
+  const [{ id }] = state.queue;
+  assert.equal(state.locked, true);
+  t.mock.timers.tick(500);
+  assert.deepEqual(attempts, [id]);
+  release();
+  await edit;
+  assert.ok(sync.flushPromise, 'the retry should wake after cleanup');
+  await sync.flushPromise;
+  assert.deepEqual(attempts, [id, id]);
+  assert.deepEqual(state.queue, []);
+});
+
 test('permission failures leave the outbox intact and schedule no retry', async t => {
   const state = setup(t, ['permission-denied']);
   await state.sync.syncItems([{ id: 'milk' }]);

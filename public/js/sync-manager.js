@@ -660,7 +660,14 @@ export class SyncManager {
     // Jitter from half to all of the delay limits synchronized retries across tabs.
     retry.timer = setTimeout(() => {
       retry.timer = null;
-      if (this.writeRetry === retry && current()) void this.flushOfflineQueue();
+      const resume = () => {
+        if (this.writeRetry === retry && current() && retry.timer == null && !retry.stopped) {
+          void this.flushOfflineQueue();
+        }
+      };
+      // If a timer fires during another drain's cleanup, resume after it releases the lock.
+      if (this.flushPromise) void this.flushPromise.then(resume);
+      else resume();
     }, Math.round(delay * (0.5 + Math.random() / 2)));
     this._notifySyncStatus('retrying');
   }
