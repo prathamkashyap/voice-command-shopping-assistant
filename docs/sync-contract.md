@@ -40,9 +40,11 @@ A replay acknowledgment removes the group and reconciles its cached list in one 
 
 Receipt rules allow only the owner to read or create the exact versioned receipt with a server commit time. Clients cannot update or delete receipts. Receipts have no automatic expiry; pruning them would let dormant clients replay an old operation. This provides duplicate protection for the same operation ID even without Web Locks. It does not resolve conflicts between distinct operation IDs, prevent older clients from overwriting item documents, or add revision-aware restores.
 
+The sender schedules up to four retries per queued group for `unavailable`, `deadline-exceeded`, and `aborted` errors returned by Firestore after its own transaction attempts. Waits grow with jitter within 0.5–1, 1–2, 2–4, and 4–8 seconds. The sender releases its tab lock during each wait and checks the durable queue before sending again. Going offline cancels the timer, and reconnecting resumes within the same retry budget. Changing accounts cancels the prior session's retry. Authorization and other errors stop the sender at the failed group. Exhausted or stopped groups remain on this device with later edits queued behind them. Reloading starts a new sync session, and the list remains available to export. [Firestore error handling](https://docs.cloud.google.com/firestore/native/docs/use-rest-api#section-error-handling)
+
 Startup reads the current account's cached list and queue together and subscribes to snapshots. Authenticated edits send only changed records. A queued edit stays visible, and a queued deletion stays hidden, when an older snapshot arrives. The IndexedDB upgrade rebuilds the account cache from its existing queue. Previously acknowledged cloud items join the cache when the listener next receives confirmed records.
 
-Existing device-list data remains accessible through **Device list** or `/?mode=local`. The account and device lists use separate storage. The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. Assisted import, item revisions, conflict review, and bounded automatic retry backoff remain subsequent steps.
+Existing device-list data remains accessible through **Device list** or `/?mode=local`. The account and device lists use separate storage. The prior unowned queue remains in the browser's local storage under `voice_shopping_offline_queue` for recovery. Assisted import, item revisions, and conflict review remain subsequent steps.
 
 ## Receipt rollout and verification
 

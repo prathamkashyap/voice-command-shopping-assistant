@@ -247,7 +247,7 @@ body {
   animation: syncPulse 2s ease-in-out infinite;
 }
 
-.sync-status[data-status="syncing"] .sync-indicator {
+.sync-status:is([data-status="syncing"], [data-status="retrying"]) .sync-indicator {
   background: var(--warning);
   animation: syncSpin 1s linear infinite;
 }
@@ -272,7 +272,7 @@ body {
 }
 
 .sync-status[data-status="synced"] .sync-label { color: var(--success); }
-.sync-status[data-status="syncing"] .sync-label { color: var(--warning); }
+.sync-status:is([data-status="syncing"], [data-status="retrying"]) .sync-label { color: var(--warning); }
 .sync-status[data-status="offline"] .sync-label { color: var(--text-faint); }
 .sync-status:is([data-status="error"], [data-status="storage-error"]) .sync-label { color: var(--error); }
 

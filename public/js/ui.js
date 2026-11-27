@@ -550,6 +550,7 @@ export class UI {
         connecting: 'Connecting…',
         synced: pendingCount > 0 ? `Syncing ${pendingCount}` : 'Synced',
         syncing: 'Syncing…',
+        retrying: 'Retrying sync…',
         offline: pendingCount > 0 ? `Offline • ${pendingCount}` : 'Offline',
         'storage-error': 'Storage error',
         error: 'Sync Error'
@@ -560,9 +561,10 @@ export class UI {
       'local-only': 'Shopping list is stored on this device',
       'local-items': 'Some items are only stored on this device',
       connecting: 'Connecting to cloud sync',
+      retrying: 'Cloud sync was interrupted. Saved changes will be retried automatically.',
       offline: 'Offline — changes are queued locally',
       'storage-error': 'Some changes could not be saved on this device',
-      error: 'Sync encountered an error'
+      error: pendingCount ? 'Changes are saved on this device. Reload to try syncing again.' : 'Sync encountered an error'
     };
     syncStatusEl.title = descriptions[status] || 'Firestore real-time sync status';
   }
