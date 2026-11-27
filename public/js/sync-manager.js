@@ -2,6 +2,8 @@ import { SyncOutbox } from './sync-outbox.js';
 
 const SYNC_STATE_KEY = 'voice_shopping_sync';
 const MAX_BATCH_SIZE = 400;
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+const RETRYABLE_WRITE_ERRORS = new Set(['aborted', 'deadline-exceeded', 'unavailable']);
 
 const FIREBASE_AUTH_URL = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 const FIREBASE_FIRESTORE_URL = 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
@@ -84,6 +86,7 @@ export class SyncManager {
     this.flushPromise = null;
     this.pendingPersistence = new Set();
     this.retryAfterFlush = false;
+    this.writeRetry = null;
     this.outboxFailed = false;
   }
 
@@ -183,6 +186,7 @@ export class SyncManager {
   disconnect() {
     this.session?.abort();
     this.session = null;
+    this.clearWriteRetry();
     this.stopRealtimeListener();
     this.enabled = false;
     this.userId = null;
@@ -319,8 +323,7 @@ export class SyncManager {
     } catch (error) {
       if (!current()) return false;
       console.warn('Firestore sync failed:', error.message);
-      this._notifySyncStatus('error');
-      return false;
+      return { error };
     } finally {
       this.syncInProgress = false;
     }
@@ -435,6 +438,8 @@ export class SyncManager {
    * Notify all registered callbacks of sync status change
    */
   _notifySyncStatus(status) {
+    if (status === 'syncing' && this.writeRetry?.stopped) status = 'error';
+    if (status === 'syncing' && this.writeRetry?.timer != null) status = 'retrying';
     this.syncStatus = this.outboxFailed ? 'storage-error'
       : this.listenerFailed && ['syncing', 'synced', 'local-items'].includes(status) ? 'error'
       : status;
@@ -468,6 +473,7 @@ export class SyncManager {
     if (!this.isOnline) return; // Already offline
     this.isOnline = false;
     this.remoteConfirmed = false;
+    this.cancelWriteRetryTimer();
     console.log('[SyncManager] Offline - queuing writes locally');
     this._notifySyncStatus('offline');
     this.stopRealtimeListener();
@@ -605,7 +611,9 @@ export class SyncManager {
 
     const userId = this.userId;
     const session = this.session;
-    const current = () => this.enabled && this.session === session && this.userId === userId && this.isOnline;
+    const db = this.db;
+    const current = () => this.enabled && this.session === session && this.userId === userId &&
+      this.db === db && this.isOnline;
     this.flushPromise = Promise.resolve()
       .then(() => this.outbox.withSender(userId, () => this.drainOutbox(userId, current)))
       .catch(error => {
@@ -627,19 +635,63 @@ export class SyncManager {
     }
   }
 
+  cancelWriteRetryTimer() {
+    if (this.writeRetry?.timer != null) {
+      clearTimeout(this.writeRetry.timer);
+      this.writeRetry.timer = null;
+    }
+  }
+
+  clearWriteRetry() {
+    this.cancelWriteRetryTimer();
+    this.writeRetry = null;
+  }
+
+  scheduleWriteRetry(group, error, current) {
+    const retry = this.writeRetry ?? { sequence: group.sequence, attempts: 0, timer: null, stopped: false };
+    this.writeRetry = retry;
+    const delay = RETRY_DELAYS_MS[retry.attempts];
+    if (!RETRYABLE_WRITE_ERRORS.has(error.code) || delay === undefined) {
+      retry.stopped = true;
+      this._notifySyncStatus('error');
+      return;
+    }
+    retry.attempts++;
+    // Jitter from half to all of the delay limits synchronized retries across tabs.
+    retry.timer = setTimeout(() => {
+      retry.timer = null;
+      const resume = () => {
+        if (this.writeRetry === retry && current() && retry.timer == null && !retry.stopped) {
+          void this.flushOfflineQueue();
+        }
+      };
+      // If a timer fires during another drain's cleanup, resume after it releases the lock.
+      if (this.flushPromise) void this.flushPromise.then(resume);
+      else resume();
+    }, Math.round(delay * (0.5 + Math.random() / 2)));
+    this._notifySyncStatus('retrying');
+  }
+
   async drainOutbox(userId, current) {
     while (current()) {
       const queue = await this.outbox.list(userId);
       if (!current()) return false;
       this.offlineQueue = [...queue];
       if (!queue.length) {
+        this.clearWriteRetry();
         if (!this.pendingPersistence.size && this.remoteConfirmed) this.reportConfirmedStatus();
         return true;
       }
       for (const group of queue) {
         if (!current()) return false;
+        if (this.writeRetry && this.writeRetry.sequence !== group.sequence) this.clearWriteRetry();
+        if (this.writeRetry?.stopped || this.writeRetry?.timer != null) return false;
         const result = await this.publishItems(group.items, group.deletedItemIds, group.id);
         if (!result) return false;
+        if (result.error) {
+          if (current()) this.scheduleWriteRetry(group, result.error, current);
+          return false;
+        }
         // The ID is unique within this database. Record an acknowledgment even if auth changed during the write.
         const reconciliation = result.replayedItems ? {
           owner: userId,
@@ -647,6 +699,7 @@ export class SyncManager {
         } : undefined;
         const account = await this.outbox.acknowledge(group.sequence, reconciliation);
         if (current()) {
+          this.clearWriteRetry();
           // The atomic account read is authoritative. Another tab may have removed
           // more than this group; reusing our old queue would restore stale overlays.
           this.offlineQueue = account?.queue ?? this.offlineQueue.filter(entry => entry.sequence !== group.sequence);
